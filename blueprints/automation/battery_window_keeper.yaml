@@ -1,0 +1,263 @@
+blueprint:
+  name: Battery window keeper
+  author: The Backshop
+  description: >-
+    **v1.1.0.** Keeps the battery of a device that lives on a charger (a wall tablet, a kiosk, a dashboard
+    phone) inside a window by switching its smart plug: off at the ceiling, on at the floor. A battery held at
+    100 % for months swells; one cycling between 50 and 80 % lasts.
+
+
+    Two ranges: **Normal** (default 50-80 %) and **Heightened** (default 70-95 %), used while the optional
+    switch below is on. The blueprint does not know why; point the switch at whatever means "keep more charge in
+    hand" in your home (an away mode, a guest staying, an alarm armed). No switch, or a switch that is
+    unavailable: Normal.
+
+
+    Safe side: the plug is held ON when a range is invalid (each floor must be below its ceiling, and no ceiling
+    above 100) or when the battery sensor has been unreachable for longer than the grace period (optionally
+    also when it has stopped reporting: see Timing). A ceiling of 100 turns the plug off only at a full 100 %,
+    which some devices never report; it then means "keep charging". A tick re-checks on a schedule, so a
+    missed change is repaired within one tick.
+
+
+    It changes the plug and nothing else: no notifications. Pair it with "Charger fault watch" to hear about a
+    charger that stops working; both may command the same plug, and both prefer on when unsure. Inputs are
+    never renamed in later versions; new ones are optional.
+  domain: automation
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    devices:
+      name: Device
+      icon: mdi:tablet
+      input:
+        charger_plug:
+          name: Charger plug
+          description: The smart plug (or relay) that powers the device's charger. A switch or a light entity.
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - switch
+                    - light
+        battery_sensor:
+          name: Battery level
+          description: The device's battery sensor, in percent.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: battery
+    normal_range:
+      name: Normal range
+      icon: mdi:battery-50
+      input:
+        normal_floor:
+          name: Normal floor
+          description: The plug turns on at or below this level.
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+        normal_ceiling:
+          name: Normal ceiling
+          description: The plug turns off at or above this level.
+          default: 80
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+    heightened_range:
+      name: Heightened range
+      icon: mdi:battery-80
+      collapsed: true
+      input:
+        heightened_switch:
+          name: Use the Heightened range while this is on
+          description: >-
+            Optional. Any entity that is on or off: a toggle helper, a binary sensor (a template one if the
+            reason is a combination), a switch. Leave empty to use the Normal range always.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - input_boolean
+                    - binary_sensor
+                    - switch
+                    - light
+        heightened_floor:
+          name: Heightened floor
+          default: 70
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+        heightened_ceiling:
+          name: Heightened ceiling
+          description: >-
+            100 means the plug turns off only at a full 100 %, which some devices never report: in effect,
+            charge continuously.
+          default: 95
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+    timing:
+      name: Timing
+      icon: mdi:timer-outline
+      collapsed: true
+      input:
+        unreachable_minutes:
+          name: Grace period for an unreachable device
+          description: >-
+            The battery sensor must be unavailable (or not a number) this long before the plug is held on. Short
+            Wi-Fi drops pass silently.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              unit_of_measurement: min
+        stale_minutes:
+          name: Treat a silent battery as unreachable after
+          description: >-
+            Optional, 0 = off. A device whose app stops reporting can leave its last level standing, say 62 %,
+            while the real battery drains to empty. With this set, a battery whose sensor has not reported
+            anything for this long is treated as unreachable, so the plug is held on (checked at each re-check).
+            Uses the time of the last report, not of the last change: a level may rightly stand still for an
+            hour. 120 suits a tablet whose app reports every few minutes; leave it off for a device that
+            reports rarely, or the plug is held on and the battery charged to full.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 1440
+              step: 5
+              unit_of_measurement: min
+        reconcile_every:
+          name: Re-check
+          description: How often the plug is re-checked against the battery, to repair a missed change.
+          default: "/15"
+          selector:
+            select:
+              options:
+                - label: Every 5 minutes
+                  value: "/5"
+                - label: Every 10 minutes
+                  value: "/10"
+                - label: Every 15 minutes
+                  value: "/15"
+                - label: Every 30 minutes
+                  value: "/30"
+
+# Trigger templates cannot read !input, so the battery entity is copied here for the `unreachable` trigger.
+trigger_variables:
+  battery_entity: !input battery_sensor
+
+# Every trigger runs the same decision below; the ids only say why it ran.
+triggers:
+  - trigger: state
+    entity_id: !input battery_sensor
+    to: null
+    id: battery
+  # An event trigger, not a state trigger: the switch is optional, and a state trigger refuses an empty
+  # entity id. Attribute-only changes (a light's brightness) also fire it; a run is idempotent, so that is
+  # harmless, and one dropped by `mode: single` is repaired by the tick.
+  - trigger: event
+    event_type: state_changed
+    event_data:
+      entity_id: !input heightened_switch
+    id: range
+  - trigger: template
+    value_template: "{{ not is_number(states(battery_entity)) }}"
+    for:
+      minutes: !input unreachable_minutes
+    id: unreachable
+  - trigger: state
+    entity_id: !input charger_plug
+    from: unavailable
+    id: plug_back
+  # The tick and a Home Assistant start share an id: both mean "re-check everything now".
+  - trigger: time_pattern
+    minutes: !input reconcile_every
+    id: tick
+  - trigger: homeassistant
+    event: start
+    id: tick
+
+conditions: []
+
+actions:
+  - variables:
+      plug: !input charger_plug
+      switch_entity: !input heightened_switch
+      unreachable_min: !input unreachable_minutes
+      stale_min: !input stale_minutes
+      n_floor: !input normal_floor
+      n_ceiling: !input normal_ceiling
+      h_floor: !input heightened_floor
+      h_ceiling: !input heightened_ceiling
+      # an unavailable switch is not "on", so it means Normal
+      heightened: "{{ switch_entity not in ['', none] and is_state(switch_entity, 'on') }}"
+      floor: "{{ (h_floor if heightened else n_floor) | float(-1) }}"
+      ceiling: "{{ (h_ceiling if heightened else n_ceiling) | float(-1) }}"
+      range_ok: "{{ 0 <= floor < ceiling <= 100 }}"
+      # -1 = no reading; the decision below then keeps the plug as it is until `unreachable` says otherwise
+      battery: "{{ states(battery_entity) | float(-1) if is_number(states(battery_entity)) else -1 }}"
+      # Unreachable: not a number for the grace period (the trigger, or a later run that finds it so), or,
+      # with "Treat a silent battery as unreachable after" set, no report at all for that long.
+      unreachable: >-
+        {%- set s = states[battery_entity] -%}
+        {{ s is none
+           or (not is_number(s.state)
+               and (trigger.id == 'unreachable'
+                    or (now() - s.last_changed).total_seconds() >= (unreachable_min | float(5)) * 60 - 1))
+           or (stale_min | float(0) > 0 and (now() - s.last_updated).total_seconds() >= (stale_min | float(0)) * 60) }}
+      relay: "{{ states(plug) }}"
+      # THE DECISION, as one template rather than as triggers: two ranges, each with a floor and a ceiling,
+      # would take six numeric_state triggers and still miss the switch flipping while the battery sits inside
+      # the window. Every trigger runs this, so each run derives the answer from the current state alone.
+      #   on   - charge: at or below the floor, or held on the safe side (bad range, unreachable battery)
+      #   off  - stop: at or above the ceiling
+      #   keep - inside the window (hysteresis: leave the plug as it is), or no reading yet
+      want: >-
+        {%- if not range_ok or unreachable -%}on
+        {%- elif battery < 0 -%}keep
+        {%- elif battery >= ceiling -%}off
+        {%- elif battery <= floor -%}on
+        {%- else -%}keep{%- endif -%}
+  - choose:
+      - alias: Charge (at or below the floor, or holding on the safe side)
+        conditions:
+          - condition: template
+            value_template: "{{ want == 'on' and relay not in ['on', 'unavailable'] }}"
+        sequence:
+          - action: homeassistant.turn_on
+            target:
+              entity_id: "{{ plug }}"
+      - alias: Stop charging (at or above the ceiling)
+        conditions:
+          - condition: template
+            value_template: "{{ want == 'off' and relay == 'on' }}"
+        sequence:
+          - action: homeassistant.turn_off
+            target:
+              entity_id: "{{ plug }}"
+
+mode: single
+max_exceeded: silent

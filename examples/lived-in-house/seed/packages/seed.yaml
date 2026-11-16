@@ -1,0 +1,38 @@
+# The fictional lived-in house: helpers, one person, one template sensor, one planted password-shaped value.
+# The angle-bracket placeholder on the password line below is replaced with a fake value by render_seed.py (so the kit's own push guard does not refuse this file).
+input_select:
+  house_mode:
+    name: House mode
+    options: [Home, Away, Night, Vacation, Party]   # FAULT 2: "Away" is also the demo alarm's arm mode
+    initial: Home
+input_boolean:
+  guest_mode:
+    name: Guest mode
+  guest_mode_2:                                     # FAULT 3: the "_2" duplicate
+    name: Guest mode
+input_number:
+  porch_dim_level: {name: Porch dim level, min: 0, max: 100, step: 5, initial: 40}
+  away_setback: {name: Away setback, min: 0, max: 10, step: 1, initial: 3}
+timer:
+  porch_timer: {name: Porch timer, duration: "00:10:00"}
+person:
+  - name: Alex
+    id: seed_alex
+template:
+  - sensor:
+      - name: "Seed unavailable sensor"             # FAULT 14: unavailable from boot
+        unique_id: seed_unavailable_sensor
+        state: "{{ 1 }}"
+        availability: "{{ false }}"
+rest_command:
+  digest_upload:                                    # FAULT 13: a password-shaped value in YAML outside secrets.yaml
+    url: "https://example.com/upload"
+    username: house
+    password: <PLANTED>
+notify:
+  - name: mobile_app_alex_phone          # stand-ins for the companion app's services (the lab has no phone), so the
+    platform: group                      # two direct notify calls succeed and leave no failed trace
+    services: [{action: persistent_notification}]
+  - name: mobile_app_alex_tablet
+    platform: group
+    services: [{action: persistent_notification}]

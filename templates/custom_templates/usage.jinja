@@ -1,0 +1,146 @@
+{#- usage.jinja - the assistant usage card's logic, written once.
+    Status: template (KIT-USE, 2026-10-24). Copied to ha/custom_templates/usage.jinja with
+    packages/assistant-usage.yaml. Read by that package's sensors, by the card's markdown views
+    (dashboards/assistant-usage-card.yaml) and by the kit's templates/tests/.
+
+    The source is sensor.assistant_usage_read: the JSON file the runtime's usage reader (runtime/usage_reader.py)
+    writes, its keys as attributes (read_at, status, reason, plan, session, week, today, models; each limit is
+    {pct, resets_at, severity}).
+
+    Every figure is "unknown" - never a guess - when the read is older than STALE_MIN minutes, when its limit's
+    reset time has already passed (the figure belongs to the old window), or when today's figure is from another
+    day. Thresholds are numbers or input_number ids.
+
+    Macros (each returns text; the package turns numbers into sensors with `| float(none)`):
+      usage_age_min(src)                      minutes since the last good read, or unknown
+      usage_pct(key, src, stale_min)          key: week, session, today, or model:<name> (e.g. model:fast)
+      usage_pace(src)                         where the week should be by now: 100 x the elapsed share of the week
+      usage_over(warn, daily, src, stale_min) on when the week reached `warn` or today reached `daily`, else off
+      usage_bars_md(warn, daily, src, ...)    the Linear bars view's text bars (a code block)
+      usage_numbers_md(warn, daily, src, ...) the Numbers view's table, with the provider's own severity
+    Both views say "Thresholds not set" while either helper still sits at its minimum (a new install).
+-#}
+{%- set SRC = 'sensor.assistant_usage_read' -%}
+{%- set STALE_MIN = 120 -%}
+{%- set WIDTH = 20 -%}
+
+{%- macro _val(v) -%}
+  {{- states(v) if v is string and v.startswith('input_number.') else v -}}
+{%- endmacro -%}
+
+{%- macro _fmt(v) -%}
+  {%- if v == 'unknown' or v is none -%}unknown{%- else -%}{{ '%g' | format(v | float | round(1)) }}%{%- endif -%}
+{%- endmacro -%}
+
+{%- macro _unset(v) -%}
+  {#- an input_number still at its minimum: an input_number without `initial` starts there on a new install -#}
+  {%- if v is string and v.startswith('input_number.') and state_attr(v, 'min') is not none
+        and states(v) | float(none) == state_attr(v, 'min') | float -%}yes{%- endif -%}
+{%- endmacro -%}
+
+{%- macro _unset_note(warn, daily) -%}
+  {%- if _unset(warn) or _unset(daily) %}
+Thresholds not set: set the weekly warning level and the daily budget (Settings > Devices & services > Helpers).
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro usage_age_min(src=SRC) -%}
+  {%- set t = as_timestamp(state_attr(src, 'read_at'), none) -%}
+  {%- if t is none -%}unknown{%- else -%}{{ ((as_timestamp(now()) - t) / 60) | round(0) | int }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro usage_pct(key, src=SRC, stale_min=STALE_MIN) -%}
+  {%- set age = usage_age_min(src) -%}
+  {%- set block = (state_attr(src, 'models') or {}).get(key[6:]) if key.startswith('model:')
+                  else state_attr(src, key) -%}
+  {%- if age == 'unknown' or age | int > stale_min | int or block is not mapping or block.pct is not number -%}
+    unknown
+  {%- elif key == 'today' and block.date != now().strftime('%Y-%m-%d') -%}
+    unknown
+  {%- elif key != 'today' and as_timestamp(block.resets_at, none) is not none
+           and as_timestamp(block.resets_at) <= as_timestamp(now()) -%}
+    unknown
+  {%- else -%}
+    {{- block.pct -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro usage_pace(src=SRC) -%}
+  {%- set w = state_attr(src, 'week') -%}
+  {%- set r = as_timestamp(w.resets_at, none) if w is mapping else none -%}
+  {%- set n = as_timestamp(now()) -%}
+  {%- if r is none or r <= n -%}unknown
+  {%- else -%}{{ ([0, [100, 100 * (n - (r - 604800)) / 604800] | min] | max) | round(1) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro usage_over(warn, daily, src=SRC, stale_min=STALE_MIN) -%}
+  {%- set w, d = usage_pct('week', src, stale_min), usage_pct('today', src, stale_min) -%}
+  {%- set wl, dl = _val(warn) | float(none), _val(daily) | float(none) -%}
+  {%- if (w != 'unknown' and wl is not none and w | float >= wl)
+        or (d != 'unknown' and dl is not none and d | float >= dl) -%}on{%- else -%}off{%- endif -%}
+{%- endmacro -%}
+
+{%- macro _bar(pct, top, mark=none, pace=none) -%}
+  {%- set fill = 0 if pct == 'unknown' else ([WIDTH, (pct | float / top * WIDTH) | round(0) | int] | min) -%}
+  {%- set mi = none if mark is none else [WIDTH - 1, (mark / top * WIDTH) | int] | min -%}
+  {%- set pi = none if pace is none else [WIDTH - 1, (pace / top * WIDTH) | int] | min -%}
+  {%- for i in range(WIDTH) -%}
+    {{- '┃' if i == mi else ('▲' if i == pi else ('█' if i < fill else '░')) -}}
+  {%- endfor -%}
+{%- endmacro -%}
+
+{%- macro usage_bars_md(warn, daily, src=SRC, stale_min=STALE_MIN) -%}
+  {%- set wl, dl = _val(warn) | float(80), _val(daily) | float(14.3) -%}
+  {%- set w, d, s = usage_pct('week', src, stale_min), usage_pct('today', src, stale_min),
+                    usage_pct('session', src, stale_min) -%}
+  {%- set p = usage_pace(src) -%}
+  {%- set dtop = [dl * 2, 1] | max -%}
+  {%- set pn = none if p == 'unknown' else p | float -%}
+  {%- set age = usage_age_min(src) %}
+```text
+Week     {{ _bar(w, 100, wl, pn) }} {{ '%8s' | format(_fmt(w)) }}  limit {{ _fmt(wl) }}
+Today    {{ _bar(d, dtop, dl) }} {{ '%8s' | format(_fmt(d)) }}  budget {{ _fmt(dl) }}
+Session  {{ _bar(s, 100) }} {{ '%8s' | format(_fmt(s)) }}  5-hour window
+```
+┃ your limit · ▲ pace line ({{ _fmt(p) }}) · the Today bar is full at twice the daily budget
+{{ 'Not read yet' if age == 'unknown' else 'Read ' ~ age ~ ' min ago' }}
+{{- _unset_note(warn, daily) }}
+{%- endmacro -%}
+
+{%- macro _resets(block) -%}
+  {%- set r = as_timestamp(block.resets_at, none) if block is mapping else none -%}
+  {{- '' if r is none else r | timestamp_custom('%a %H:%M') -}}
+{%- endmacro -%}
+
+{%- macro _left(v, limit) -%}
+  {{- '' if v == 'unknown' else '%g' | format((limit - v | float) | round(1)) -}}
+{%- endmacro -%}
+
+{%- macro usage_numbers_md(warn, daily, src=SRC, stale_min=STALE_MIN) -%}
+  {%- set wl, dl = _val(warn) | float(80), _val(daily) | float(14.3) -%}
+  {%- set w, d, s = usage_pct('week', src, stale_min), usage_pct('today', src, stale_min),
+                    usage_pct('session', src, stale_min) -%}
+  {%- set st, why = state_attr(src, 'status'), state_attr(src, 'reason') -%}
+  {%- set age = usage_age_min(src) %}
+| | Now | Limit | Left | Resets |
+|---|---:|---:|---:|---|
+| Week | {{ _fmt(w) }} | {{ _fmt(wl) }} | {{ _left(w, wl) }} | {{ _resets(state_attr(src, 'week')) }} |
+| Today | {{ _fmt(d) }} | {{ _fmt(dl) }} | {{ _left(d, dl) }} | midnight |
+| Session (5 h) | {{ _fmt(s) }} | 100% | {{ _left(s, 100) }} | {{ _resets(state_attr(src, 'session')) }} |
+{%- for name, block in (state_attr(src, 'models') or {}).items() | sort %}
+{%- set m = usage_pct('model:' ~ name, src, stale_min) %}
+| Week, {{ name }} | {{ _fmt(m) }} | 100% | {{ _left(m, 100) }} | {{ _resets(block) }} |
+{%- endfor %}
+| Pace line | {{ _fmt(usage_pace(src)) }} | | | |
+
+{%- set ns = namespace(sev=[]) -%}
+{%- for key in ('week', 'session') -%}
+  {%- set b = state_attr(src, key) -%}
+  {%- if b is mapping and b.get('severity') -%}{%- set ns.sev = ns.sev + [key ~ ' ' ~ b.get('severity')] -%}{%- endif -%}
+{%- endfor -%}
+{%- set sev = ns.sev %}
+{{ 'Not read yet' if age == 'unknown' else 'Read ' ~ age ~ ' min ago' }}
+{{- '' if st in (none, 'ok') else ' · last try: ' ~ st ~ (' - ' ~ why if why else '') }}
+{{- ' · provider: ' ~ sev | join(', ') if sev else '' }}
+{{- _unset_note(warn, daily) }}
+{%- endmacro -%}

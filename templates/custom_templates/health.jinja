@@ -1,0 +1,210 @@
+{#- health.jinja - every health check, written once.
+    Status: template (O3b, 2026-10-13). Copied to ha/custom_templates/health.jinja by the Phase 1 generation and
+    filled from house/docs/health-checks.md. Read by packages/health_check.yaml and by the kit's templates/tests/.
+    Principle: principles/health-checks.md (rule numbers below are its rules).
+
+    CHECKS is the house's list, one entry per check, grouped by subsystem (rule 1). Each check is a kind plus its
+    target. The macros below hold the logic for each kind; the sensors only count what health() returns. Add a
+    check here, never in a card or an automation.
+
+    Kinds (expand() follows groups: name the member entities, never a group or a light group):
+      battery      entity, fault_below, notice_below  a battery % sensor; thresholds are numbers or input_number ids (rule 9);
+                   [minutes]                           how long an unreadable value may last (default 30)
+      unavailable  entity, minutes                     the integration dropped it (rule 4)
+      silent       entity, hours                       no report for N hours; a NOTICE, never a fault (rule 4)
+      enabled      entity                              an automation that must stay on: watch the watchers (rule 6)
+      age          entity, notice_hours, fault_hours   a timestamp sensor, e.g. the last backup (rule 11); [minutes] as battery
+      mesh         entities, min_online                "x of y online"; 0 online is a fault (rule 9)
+      is_on        entity, severity                    a switch or flag that must be on (rule 12: notifications)
+      is_off       entity, severity                    a mute or test switch that must be off; default a NOTICE (rule 25)
+      above        entity, notice_above, fault_above   a numeric sensor that must stay low: CPU temperature, disk use
+                                                       (System Monitor integration); thresholds and [minutes] as for
+                                                       battery (rule 9)
+      integration  entity                              the integration that owns `entity` must be loaded: a Thread or
+                                                       Matter server, a radio coordinator, a cloud integration. Name
+                                                       any one entity it creates; a fault when its config entry is in
+                                                       setup error / retry / not loaded (it shows in Settings > Devices
+                                                       & services as failed). An app that must run uses
+                                                       is_on on its Supervisor "running" binary sensor instead.
+    Optional on every check: name (plain words for the push), suppress: true (skipped while
+    input_datetime.health_planned_restart_until is in the future; rule 10), severity override.
+
+    A check whose entity does not exist is a NOTICE ("check source gone"): rule 8 says remove it, and a silent
+    pass would hide that it can no longer fire. A battery, above or age reading that cannot be read (`unknown`,
+    `unavailable`, or text that is not a number or a time) is not a pass either: once it has lasted `minutes`
+    (default 30, so a restart is not an alarm) it is a finding, a fault unless the check sets a severity. The one
+    exception is `unavailable` on an entity that has its own `unavailable` check: that check reports it, so one
+    cause raises one finding.
+-#}
+
+{%- set CHECKS = {
+  "security": [
+    {"kind": "battery", "entity": "sensor.front_door_lock_battery", "name": "Front door lock battery",
+     "fault_below": "input_number.health_battery_fault_pct", "notice_below": "input_number.health_battery_notice_pct"},
+    {"kind": "unavailable", "entity": "lock.front_door", "minutes": 30, "name": "Front door lock"},
+    {"kind": "enabled", "entity": "automation.health_fault_push", "name": "Health fault push automation"},
+  ],
+  "plumbing": [
+    {"kind": "unavailable", "entity": "binary_sensor.kitchen_sink_leak", "minutes": 60, "name": "Kitchen sink leak sensor"},
+    {"kind": "silent", "entity": "binary_sensor.kitchen_sink_leak", "hours": 24, "name": "Kitchen sink leak sensor"},
+  ],
+  "system": [
+    {"kind": "is_on", "entity": "input_boolean.notifications_enabled", "name": "Phone notifications"},
+    {"kind": "age", "entity": "sensor.backup_last_successful_automatic_backup", "notice_hours": 30,
+     "fault_hours": 54, "name": "Last backup"},
+    {"kind": "unavailable", "entity": "sensor.backup_last_successful_automatic_backup", "minutes": 60,
+     "name": "Last backup"},
+    {"kind": "enabled", "entity": "automation.health_all_clear_push", "name": "Health all-clear automation"},
+    {"kind": "is_off", "entity": "input_boolean.notify_test_mode", "name": "Notification test mode"},
+    {"kind": "above", "entity": "sensor.system_monitor_disk_usage", "notice_above": 80, "fault_above": 92,
+     "name": "Disk use"},
+    {"kind": "above", "entity": "sensor.system_monitor_processor_temperature", "notice_above": 75,
+     "fault_above": 85, "name": "Processor temperature"},
+  ],
+  "network": [
+    {"kind": "mesh", "entities": ["light.kitchen_ceiling", "light.hall_ceiling", "switch.porch_light"],
+     "min_online": 3, "name": "Downstairs lights", "suppress": true},
+    {"kind": "integration", "entity": "light.kitchen_ceiling", "name": "Lighting radio integration"},
+  ],
+} -%}
+
+{%- macro _num(v) -%}
+{#- A threshold: a number, or the state of an input_number. -#}
+{{- states(v) if (v is string and v.startswith("input_number.")) else v -}}
+{%- endmacro -%}
+
+{#- `why` must not hold a live counter: the sensors re-render every minute, and a changing attribute is a recorder
+    row and an automation run per minute. Time-based findings carry a fixed `since` (epoch seconds) instead, and the
+    push text turns it into a clock time when it is sent. -#}
+{%- macro _finding(c, severity, why, since=none) -%}
+{{- {"check": c.kind, "name": c.get("name", c.get("entity", "?")), "entity": c.get("entity", ""),
+     "severity": severity, "why": why, "since": since} | to_json -}}
+{%- endmacro -%}
+
+{%- macro _unreadable(c, s) -%}
+{#- A battery, above or age value that cannot be read: a finding once it has lasted c.minutes (default 30).
+    `unavailable` is left to the entity's own `unavailable` check when the house has one (one cause, one finding). -#}
+{%- set ns = namespace(own=false) -%}
+{%- for group in CHECKS.values() -%}
+  {%- for other in group -%}
+    {%- if other.kind == "unavailable" and other.get("entity") == c.entity -%}{%- set ns.own = true -%}{%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+{%- set mins = (as_timestamp(now()) - as_timestamp(s.last_changed)) / 60 -%}
+{%- if not (s.state == "unavailable" and ns.own) and mins >= c.get("minutes", 30) | float -%}
+  {{- _finding(c, c.get("severity") or "fault",
+               ("unavailable" if s.state == "unavailable" else "reading unknown") ~ " since",
+               as_timestamp(s.last_changed)) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro check(c_json) -%}
+{#- One check -> a finding as JSON, or the empty string when it passes. -#}
+{%- set c = c_json | from_json -%}
+{%- set k = c.kind -%}
+{%- set sev = c.get("severity") -%}
+{%- set until = states("input_datetime.health_planned_restart_until") -%}
+{%- if c.get("suppress", false) and as_timestamp(until, 0) > as_timestamp(now()) -%}
+  {#- planned restart: skipped (rule 10) -#}
+{%- elif k == "mesh" -%}
+  {%- set objs = expand(c.entities) -%}
+  {%- set up = objs | rejectattr("state", "in", ["unavailable", "unknown"]) | list | count -%}
+  {%- set total = c.entities | count -%}
+  {%- if objs | count < total -%}
+    {{- _finding(c, "notice", "check source gone: " ~ (total - (objs | count)) ~ " of " ~ total ~ " entities missing") -}}
+  {%- elif up == 0 -%}
+    {{- _finding(c, sev or "fault", "0 of " ~ total ~ " online") -}}
+  {%- elif up < c.min_online | int -%}
+    {{- _finding(c, sev or "notice", up ~ " of " ~ total ~ " online") -}}
+  {%- endif -%}
+{%- else -%}
+  {%- set s = expand(c.entity) | first | default(none) -%}
+  {%- if s is none -%}
+    {{- _finding(c, "notice", "check source gone: " ~ c.entity) -}}
+  {%- elif k == "battery" -%}
+    {%- set lvl = s.state -%}
+    {%- if lvl | is_number -%}
+      {%- if lvl | float < _num(c.fault_below) | float -%}
+        {{- _finding(c, sev or "fault", "battery " ~ lvl | float | round(0) | int ~ " %") -}}
+      {%- elif lvl | float < _num(c.notice_below) | float -%}
+        {{- _finding(c, "notice", "battery " ~ lvl | float | round(0) | int ~ " %") -}}
+      {%- endif -%}
+    {%- else -%}
+      {{- _unreadable(c, s) -}}
+    {%- endif -%}
+  {%- elif k == "unavailable" -%}
+    {%- set mins = (as_timestamp(now()) - as_timestamp(s.last_changed)) / 60 -%}
+    {%- if s.state == "unavailable" and mins >= c.minutes | float -%}
+      {{- _finding(c, sev or "fault", "unavailable since", as_timestamp(s.last_changed)) -}}
+    {%- endif -%}
+  {%- elif k == "silent" -%}
+    {%- set seen = s.last_reported if s.last_reported is defined else s.last_updated -%}
+    {%- set hrs = (as_timestamp(now()) - as_timestamp(seen)) / 3600 -%}
+    {%- if s.state not in ["unavailable", "unknown"] and hrs >= c.hours | float -%}
+      {{- _finding(c, "notice", "no report since", as_timestamp(seen)) -}}
+    {%- endif -%}
+  {%- elif k == "enabled" -%}
+    {%- if s.state != "on" -%}
+      {{- _finding(c, sev or "fault", "automation is " ~ s.state) -}}
+    {%- endif -%}
+  {%- elif k == "is_on" -%}
+    {%- if s.state != "on" -%}
+      {{- _finding(c, sev or "fault", "is " ~ s.state) -}}
+    {%- endif -%}
+  {%- elif k == "is_off" -%}
+    {%- if s.state == "on" -%}
+      {{- _finding(c, sev or "notice", "is on since " ~ as_timestamp(s.last_changed) | timestamp_custom("%-I:%M %p")) -}}
+    {%- endif -%}
+  {%- elif k == "above" -%}
+    {%- set v = s.state -%}
+    {%- if v | is_number -%}
+      {%- set unit = s.attributes.get("unit_of_measurement", "") -%}
+      {%- set shown = (v | float | round(0) | int ~ " " ~ unit) | trim -%}
+      {%- if v | float > _num(c.fault_above) | float -%}
+        {{- _finding(c, sev or "fault", "at " ~ shown) -}}
+      {%- elif v | float > _num(c.notice_above) | float -%}
+        {{- _finding(c, "notice", "at " ~ shown) -}}
+      {%- endif -%}
+    {%- else -%}
+      {{- _unreadable(c, s) -}}
+    {%- endif -%}
+  {%- elif k == "integration" -%}
+    {%- set eid = config_entry_id(c.entity) -%}
+    {%- set st = config_entry_attr(eid, "state") if eid else none -%}
+    {%- if eid is none -%}
+      {{- _finding(c, "notice", "check source gone: " ~ c.entity ~ " has no integration entry") -}}
+    {%- elif st not in ["loaded", "setup_in_progress", "unload_in_progress"] -%}
+      {{- _finding(c, sev or "fault", "integration " ~ (st or "removed") | replace("_", " ")) -}}
+    {%- endif -%}
+  {%- elif k == "age" -%}
+    {%- set t = as_timestamp(s.state, none) -%}
+    {%- if t is not none -%}
+      {%- set hrs = (as_timestamp(now()) - t) / 3600 -%}
+      {%- if hrs >= c.fault_hours | float -%}
+        {{- _finding(c, sev or "fault", "last updated", t) -}}
+      {%- elif hrs >= c.notice_hours | float -%}
+        {{- _finding(c, "notice", "last updated", t) -}}
+      {%- endif -%}
+    {%- else -%}
+      {{- _unreadable(c, s) -}}
+    {%- endif -%}
+  {%- else -%}
+    {{- _finding(c, "notice", "unknown check kind " ~ k) -}}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro health(subsystem) -%}
+{#- The subsystem's whole state, as JSON: faults (the sensor's state), notices, severity, findings.
+    Severity: "fault" if any fault, else "notice" if any notice, else "ok" (rule 2: the card never decides). -#}
+{%- set ns = namespace(f=[]) -%}
+{%- for c in CHECKS.get(subsystem, []) -%}
+  {%- set r = check(c | to_json) -%}
+  {%- if r | trim -%}{%- set ns.f = ns.f + [r | from_json] -%}{%- endif -%}
+{%- endfor -%}
+{%- set faults = ns.f | selectattr("severity", "eq", "fault") | list | count -%}
+{%- set notices = ns.f | selectattr("severity", "eq", "notice") | list | count -%}
+{{- {"faults": faults, "notices": notices,
+     "severity": "fault" if faults else ("notice" if notices else "ok"),
+     "findings": ns.f} | to_json -}}
+{%- endmacro -%}

@@ -1,0 +1,8 @@
+# Plain-English card names, one line per card: CODE<TAB>plain name (about ten words, no codes, no jargon: what it does for the house or for the owner).
+# Template: templates/docs/card-names.tsv (kit KIT-BRD); goes to house/docs/card-names.tsv. Whoever creates a card adds its line in the same commit; the board view shows it as the card's headline.
+# The lines below name the seed rows in templates/docs/board.md; replace them as the seed rows are replaced.
+PORCH-1	Turn the porch light on at dusk and off at bedtime
+ROUTER-1	One place every phone notification goes through
+HEALTH-1	A count of things that are wrong or unknown, per subsystem
+DRILL-1	Restore a backup once and time how long it takes
+MANUAL-1	The first chapter of the household manual: the porch light

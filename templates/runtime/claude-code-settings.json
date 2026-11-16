@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(//homeassistant/secrets.yaml)",
+      "Read(//homeassistant/.storage/**)",
+      "Read(//homeassistant/home-assistant_v2.db*)",
+      "Read(//homeassistant/.claudecode/**)",
+      "Read(//homeassistant/.cloud/**)",
+      "Read(//homeassistant/.git-credentials*)",
+      "Read(//config/secrets.yaml)",
+      "Read(//config/.storage/**)",
+      "Read(//config/home-assistant_v2.db*)",
+      "Read(//config/.cloud/**)",
+      "Read(//backup/**)",
+      "Read(//share/**/secrets.yaml)",
+      "Read(//share/**/.storage/**)",
+      "Read(//root/.claude/.credentials.json)",
+      "Read(//root/.git-credentials*)",
+      "Read(**/secrets.yaml)",
+      "Read(**/.storage/**)",
+      "Read(**/.git-credentials*)",
+      "Read(**/.env)",
+      "Read(**/*.tar)",
+      "Read(**/ha_token*)",
+      "Read(//**/ha_token*)",
+      "Read(~/.config/home-assistant/**)",
+      "Edit(//homeassistant/secrets.yaml)",
+      "Edit(//homeassistant/.storage/**)",
+      "Edit(//config/secrets.yaml)",
+      "Edit(//config/.storage/**)"
+    ]
+  }
+}

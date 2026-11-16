@@ -1,0 +1,4 @@
+# Add to the lab's configuration.yaml (keep the existing lines). Makes the packages/ folder load.
+homeassistant:
+  packages: !include_dir_named packages
+# automations.yaml, scripts.yaml and scenes.yaml are already included by a default install.

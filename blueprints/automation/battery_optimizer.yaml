@@ -1,0 +1,826 @@
+blueprint:
+  name: Battery Optimizer
+  author: The Backshop
+  description: >-
+    **v1.0.1.** Looks after the battery of a device that lives on a charger behind a smart plug (a wall tablet,
+    a kiosk, a dashboard phone, a screenless board that only reports its battery), in one automation per device.
+    It does two jobs, and the automation's own on/off switch turns both on or off.
+
+
+    **Keeps the battery in a window** by switching the plug: off at the ceiling, on at the floor. A battery held
+    at 100 % for months swells; one cycling between 50 and 80 % lasts. Two ranges: **Normal** (default 50-80 %)
+    and **Heightened** (default 70-95 %), used while an optional switch is on (an away mode, a guest staying:
+    whatever means "keep more charge in hand"). The plug is held ON when a range is invalid or the battery has
+    been unreachable past its grace period. A re-check on a schedule repairs a missed change. A sensor that keeps
+    its last number without reporting (an app that died) is not unreachable unless you set "Treat a silent battery
+    as unreachable after" (Timing).
+
+
+    **Watches the charger** and says when it stops working, and when it works again. Faults:
+    **not_charging** - the plug has been on a while and the battery has FALLEN (since the device went idle, with
+    an idle sensor); **low_battery** - below a level for too long; **plug_unavailable** - the plug unreachable
+    past the grace period; **no_power** - plug on but no power reaches the device; **power_without_plug** - plug
+    off but the device still charging, a relay stuck on. Each clears once the opposite has held for 5 minutes.
+    Detection is always on; by default a fault also turns the plug on (charging is the safe state), except a
+    stuck relay and an unreachable plug.
+
+
+    **Notifications are optional.** Leave the action empty and it works silently. Give it an action and it runs
+    at every fault and clear (and with `status` `reset` after a restart, and at a reload that finds no run of
+    this automation alive), with `status`, `kind`, a stable `fault_id` (use it as the notification tag),
+    `fault_ids`, `message`, `battery` and `plug_entity`. Treat `reset` silently: clear the tags in `fault_ids`,
+    show nothing.
+
+
+    Combines "Battery window keeper" 1.1.0 and "Charger fault watch" 1.2.0 with the same input names: an
+    instance of either converts by changing only its blueprint path (see the README for the one difference).
+    Inputs are never renamed in later versions; new ones are optional.
+  domain: automation
+  homeassistant:
+    min_version: "2025.4.0"
+  input:
+    devices:
+      name: Device
+      icon: mdi:tablet
+      input:
+        charger_plug:
+          name: Charger plug
+          description: The smart plug (or relay) that powers the device's charger. A switch or a light entity.
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - switch
+                    - light
+        battery_sensor:
+          name: Battery level
+          description: The device's battery sensor, in percent.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: battery
+        power_sensor:
+          name: External power detected
+          description: >-
+            Optional. On while the device reports it is plugged in (many kiosk apps expose this). Catches a dead
+            cable or a stuck relay within the grace period. Without it, a stuck relay is found from the battery
+            rising while the plug is off, and a dead cable from "Expect a rise within" (if set) or, later, from
+            not_charging.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+        idle_sensor:
+          name: Device idle (recommended when use varies)
+          description: >-
+            Optional. On while the device is in its low-drain state: a screen off or on its screensaver, a board
+            asleep. A device in use can drain faster than a small charger fills it, so without this a busy hour can
+            look like a dead charger. Leave empty for a device whose drain is steady.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - switch
+                    - input_boolean
+    ranges:
+      name: Ranges
+      icon: mdi:battery-50
+      input:
+        normal_floor:
+          name: Normal floor
+          description: The plug turns on at or below this level.
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+        normal_ceiling:
+          name: Normal ceiling
+          description: The plug turns off at or above this level.
+          default: 80
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+        heightened_switch:
+          name: Use the Heightened range while this is on
+          description: >-
+            Optional. Any entity that is on or off: a toggle helper, a binary sensor (a template one if the
+            reason is a combination), a switch. Leave empty to use the Normal range always. Unavailable means
+            Normal.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - input_boolean
+                    - binary_sensor
+                    - switch
+                    - light
+        heightened_floor:
+          name: Heightened floor
+          default: 70
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+        heightened_ceiling:
+          name: Heightened ceiling
+          description: >-
+            100 means the plug turns off only at a full 100 %, which some devices never report: in effect,
+            charge continuously.
+          default: 95
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+    timing:
+      name: Timing
+      icon: mdi:timer-outline
+      collapsed: true
+      input:
+        unreachable_minutes:
+          name: Grace period for an unreachable battery
+          description: >-
+            The battery sensor must be unavailable (or not a number) this long before the plug is held on. Short
+            Wi-Fi drops pass silently.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              unit_of_measurement: min
+        stale_minutes:
+          name: Treat a silent battery as unreachable after
+          description: >-
+            Optional, 0 = off. A device whose app stops reporting can leave its last level standing, say 62 %,
+            while the real battery drains to empty. With this set, a battery whose sensor has not reported
+            anything for this long is treated as unreachable, so the plug is held on (checked at each re-check).
+            Uses the time of the last report, not of the last change: a level may rightly stand still for an
+            hour. 120 suits a tablet whose app reports every few minutes; leave it off for a device that
+            reports rarely, or the plug is held on and the battery charged to full.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 1440
+              step: 5
+              unit_of_measurement: min
+        reconcile_every:
+          name: Re-check
+          description: How often the plug is re-checked against the battery, to repair a missed change.
+          default: "/15"
+          selector:
+            select:
+              options:
+                - label: Every 5 minutes
+                  value: "/5"
+                - label: Every 10 minutes
+                  value: "/10"
+                - label: Every 15 minutes
+                  value: "/15"
+                - label: Every 30 minutes
+                  value: "/30"
+    faults:
+      name: Faults
+      icon: mdi:tune
+      collapsed: true
+      input:
+        settle_minutes:
+          name: Charging at least
+          description: The not-charging check starts only after the plug has been on this long.
+          default: 60
+          selector:
+            number:
+              min: 15
+              max: 480
+              step: 5
+              unit_of_measurement: min
+        idle_minutes:
+          name: Device idle at least
+          description: With a device idle sensor, the not-charging check also needs the device idle this long.
+          default: 45
+          selector:
+            number:
+              min: 5
+              max: 240
+              step: 5
+              unit_of_measurement: min
+        fall_percent:
+          name: Fallen by at least
+          description: >-
+            How far the battery must have fallen below its level when the device went idle (or charging started,
+            if later; without an idle sensor, when charging started). Keep it at 2 or more: battery sensors report
+            whole percents, so 1 is noise.
+          default: 2
+          selector:
+            number:
+              min: 1
+              max: 20
+              step: 1
+              unit_of_measurement: "%"
+        low_level:
+          name: Low battery level
+          description: >-
+            A backstop well under the floor: a busy screen can hold a working slow charger a few points under the
+            floor for hours.
+          default: 35
+          selector:
+            number:
+              min: 1
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+        low_minutes:
+          name: Low for at least
+          default: 60
+          selector:
+            number:
+              min: 15
+              max: 720
+              step: 5
+              unit_of_measurement: min
+        grace_minutes:
+          name: Grace period for device problems
+          description: How long the plug must be unavailable, or power must disagree with the plug, before it counts.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              unit_of_measurement: min
+        rise_minutes:
+          name: Expect a rise within
+          description: >-
+            Optional, 0 = off. Without a plugged-in sensor: a no_power fault if the plug has been on this long (and
+            the device idle this long, with an idle sensor) and the battery has not risen at all. Only for a charger
+            that clearly outpaces the device's drain (many small battery boards: 15 min); a slow charger on a busy
+            tablet can sit flat for an hour.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 240
+              step: 5
+              unit_of_measurement: min
+        unplugged_rise_percent:
+          name: Risen while unplugged by at least
+          description: >-
+            Without a plugged-in sensor: a power_without_plug fault (relay stuck on) when the battery has risen this
+            far above its level when the plug turned off. A battery cannot charge itself.
+          default: 2
+          selector:
+            number:
+              min: 1
+              max: 20
+              step: 1
+              unit_of_measurement: "%"
+        turn_on_at_fault:
+          name: Turn the plug on when a fault starts
+          default: true
+          selector:
+            boolean: {}
+    notifications:
+      name: Notifications
+      icon: mdi:bell-outline
+      input:
+        fault_action:
+          name: Action (optional)
+          description: >-
+            Leave empty to run silently: the plug is still kept and faults still turn it on. Otherwise this runs at
+            every fault and every clear, and with status `reset` after a restart and at any automation reload that
+            finds no run of this automation alive (an unchanged reload with nothing open looks the same as a
+            changed one, so a reset can come with nothing to withdraw). Handle `reset` silently: clear the tags in
+            `fault_ids` and show nothing. Variables: `status`
+            (fault / clear / reset), `kind`, `fault_id`, `fault_ids` (every tag this plug can use; for a reset),
+            `message`, `battery` (the sensor's state, a string), `plug_entity`. To get the event "Charger fault
+            watch" fired by default, add an "Event" action that fires `charger_fault_watch` with these variables.
+          default: []
+          selector:
+            action: {}
+
+
+# Trigger templates cannot read !input, so the entities they need are copied here.
+trigger_variables:
+  plug_entity: !input charger_plug
+  battery_entity: !input battery_sensor
+  power_entity: !input power_sensor
+
+# Three kinds of run share this automation, told apart by the trigger id:
+#   keep_*  - the KEEPER: decide on/off for the plug from the current state alone. Short, no waits.
+#   the fault ids (plug_unavailable / no_power / power_without_plug / low_battery / detected) - one FAULT per
+#     run: raise it, wait for it to clear, clear it. `detected` is a fault one of the watches inferred from the
+#     battery, or one still holding after a restart (the event battery_optimizer_internal is this automation
+#     talking to itself; nothing else needs it).
+#   watch / restart - the plug turned on or off, or Home Assistant started or automations were reloaded: watch
+#     this phase for the faults only the battery can show. A restart also runs the keeper first.
+# Fault variables (kind, fault_id, status, message) belong to their run alone: since Home Assistant 2025.4 a
+# `variables` step writes to the whole run, so they cannot live inside the parallel watches. The keeper's
+# variables start with k_ for the same reason: a restart run holds both.
+triggers:
+  # ---- keeper ----
+  - trigger: state
+    entity_id: !input battery_sensor
+    to: null
+    id: keep_battery
+  # An event trigger, not a state trigger: the switch is optional, and a state trigger refuses an empty
+  # entity id. Attribute-only changes (a light's brightness) also fire it; a keeper run is idempotent.
+  - trigger: event
+    event_type: state_changed
+    event_data:
+      entity_id: !input heightened_switch
+    id: keep_range
+  - trigger: template
+    value_template: "{{ not is_number(states(battery_entity)) }}"
+    for:
+      minutes: !input unreachable_minutes
+    id: keep_unreachable
+  - trigger: state
+    entity_id: !input charger_plug
+    from:
+      - unavailable
+      - unknown
+    id: keep_plug_back
+  - trigger: time_pattern
+    minutes: !input reconcile_every
+    id: keep_tick
+  # ---- faults ----
+  # `unknown` too: an MQTT plug that loses its retained state goes unknown, and the fault's clear treats it so
+  - trigger: state
+    entity_id: !input charger_plug
+    to:
+      - unavailable
+      - unknown
+    for:
+      minutes: !input grace_minutes
+    id: plug_unavailable
+  - trigger: template
+    value_template: "{{ power_entity not in ['', none] and is_state(plug_entity, 'on') and is_state(power_entity, 'off') }}"
+    for:
+      minutes: !input grace_minutes
+    id: no_power
+  - trigger: template
+    value_template: "{{ power_entity not in ['', none] and is_state(plug_entity, 'off') and is_state(power_entity, 'on') }}"
+    for:
+      minutes: !input grace_minutes
+    id: power_without_plug
+  - trigger: numeric_state
+    entity_id: !input battery_sensor
+    below: !input low_level
+    for:
+      minutes: !input low_minutes
+    id: low_battery
+  - trigger: event
+    event_type: battery_optimizer_internal
+    event_data:
+      plug_entity: "{{ plug_entity }}"
+    id: detected
+  # ---- watch ----
+  - trigger: state
+    entity_id: !input charger_plug
+    to:
+      - "on"
+      - "off"
+    id: watch
+  # One start trigger for both jobs (the keeper's re-check and the watch's restart): two would start two runs
+  # at once, and the second would count the first as a run that survived.
+  - trigger: homeassistant
+    event: start
+    id: restart
+  - trigger: event
+    event_type: automation_reloaded
+    id: restart
+
+conditions: []
+
+actions:
+  - variables:
+      idle_entity: !input idle_sensor
+      has_idle: "{{ idle_entity not in ['', none] }}"
+      has_power: "{{ power_entity not in ['', none] }}"
+      settle_minutes_in: !input settle_minutes
+      idle_minutes_in: !input idle_minutes
+      rise_minutes_in: !input rise_minutes
+      unplugged_rise_in: !input unplugged_rise_percent
+      fall_percent: !input fall_percent
+      low_level: !input low_level
+      low_minutes: !input low_minutes
+      grace_minutes: !input grace_minutes
+      turn_on_at_fault: !input turn_on_at_fault
+      plug_name: "{{ state_attr(plug_entity, 'friendly_name') or plug_entity }}"
+      fault_prefix: "{{ plug_entity | replace('.', '_') }}"
+      fault_ids: >-
+        {{ ['not_charging', 'low_battery', 'plug_unavailable', 'no_power', 'power_without_plug']
+           | map('regex_replace', '^', fault_prefix ~ '_') | list }}
+  - choose:
+      # ---- KEEPER: one decision from the current state. Runs are idempotent, so two at once agree; and so
+      # that two cannot leave the plug on an older answer (a run that decided before a change but whose command
+      # landed after the newer run's), each run decides again after its command and acts again if the answer
+      # changed meanwhile: the last run to finish acts on the latest state. ----
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id.startswith('keep_') }}"
+        sequence: &keeper
+          - variables:
+              k_switch: !input heightened_switch
+              k_unreachable_min: !input unreachable_minutes
+              k_stale_min: !input stale_minutes
+              k_n_floor: !input normal_floor
+              k_n_ceiling: !input normal_ceiling
+              k_h_floor: !input heightened_floor
+              k_h_ceiling: !input heightened_ceiling
+              k_last: ""
+          - repeat:
+              sequence:
+                - variables:
+                    # an unavailable switch is not "on", so it means Normal
+                    k_heightened: "{{ k_switch not in ['', none] and is_state(k_switch, 'on') }}"
+                    k_floor: "{{ (k_h_floor if k_heightened else k_n_floor) | float(-1) }}"
+                    k_ceiling: "{{ (k_h_ceiling if k_heightened else k_n_ceiling) | float(-1) }}"
+                    k_range_ok: "{{ 0 <= k_floor < k_ceiling <= 100 }}"
+                    # -1 = no reading; the decision then keeps the plug as it is until `unreachable` says otherwise
+                    k_battery: "{{ states(battery_entity) | float(-1) if is_number(states(battery_entity)) else -1 }}"
+                    # Unreachable: not a number for the grace period (the trigger, or a later run that finds it
+                    # so), or, with "Treat a silent battery as unreachable after" set, no report for that long.
+                    k_unreachable: >-
+                      {%- set s = states[battery_entity] -%}
+                      {{ s is none
+                         or (not is_number(s.state)
+                             and (trigger.id == 'keep_unreachable'
+                                  or (now() - s.last_changed).total_seconds() >= (k_unreachable_min | float(5)) * 60 - 1))
+                         or (k_stale_min | float(0) > 0 and (now() - s.last_updated).total_seconds() >= (k_stale_min | float(0)) * 60) }}
+                    k_relay: "{{ states(plug_entity) }}"
+                    #   on   - charge: at or below the floor, or held on the safe side (bad range, unreachable battery)
+                    #   off  - stop: at or above the ceiling
+                    #   keep - inside the window (hysteresis: leave the plug as it is), or no reading yet
+                    k_want: >-
+                      {%- if not k_range_ok or k_unreachable -%}on
+                      {%- elif k_battery < 0 -%}keep
+                      {%- elif k_battery >= k_ceiling -%}off
+                      {%- elif k_battery <= k_floor -%}on
+                      {%- else -%}keep{%- endif -%}
+                    k_again: "{{ k_last != '' and k_want != k_last }}"
+                - choose:
+                    - alias: Charge (at or below the floor, or holding on the safe side)
+                      conditions:
+                        - condition: template
+                          value_template: "{{ k_want == 'on' and k_relay not in ['on', 'unavailable'] and (k_last == '' or k_again) }}"
+                      sequence:
+                        - action: homeassistant.turn_on
+                          continue_on_error: true
+                          target:
+                            entity_id: "{{ plug_entity }}"
+                    - alias: Stop charging (at or above the ceiling)
+                      conditions:
+                        - condition: template
+                          value_template: "{{ k_want == 'off' and k_relay == 'on' and (k_last == '' or k_again) }}"
+                      sequence:
+                        - action: homeassistant.turn_off
+                          continue_on_error: true
+                          target:
+                            entity_id: "{{ plug_entity }}"
+                - variables:
+                    k_done: "{{ k_last != '' and not k_again }}"
+                    k_last: "{{ k_want }}"
+              until:
+                - condition: template
+                  value_template: "{{ k_done or repeat.index >= 3 }}"
+
+      # ---- RAISE AND CLEAR: one fault per run. Run the action with status fault; wait until the fault has
+      # stopped holding for 5 minutes in a row; run the action with status clear. ----
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id not in ['watch', 'restart'] }}"
+        sequence:
+          - variables:
+              detected: "{{ trigger.id == 'detected' }}"
+              kind: "{{ trigger.event.data.kind if detected else trigger.id }}"
+              fault_id: "{{ fault_prefix }}_{{ kind }}"
+              # for a fault inferred from the battery: the level it was raised at
+              fault_level: "{{ trigger.event.data.get('fault_level', 0) | float(0) if detected else 0 }}"
+              recheck: "{{ detected and trigger.event.data.get('recheck', false) }}"
+              # for a re-check: when the plug last changed before the restart's keeper ran
+              recheck_mark: "{{ trigger.event.data.get('plug_mark', 0) if detected else 0 }}"
+          # After a restart, a fault that still holds is raised once it has held for its grace period from now
+          # (its state or template trigger fires only on a change, and one that already holds at start-up is
+          # not a change). Any other run passes straight through: timeout 0 checks once and moves on.
+          - wait_template: &fault_gone >-
+              {% set b = states(battery_entity) %}
+              {%- set p_on, p_off = is_state(plug_entity, 'on'), is_state(plug_entity, 'off') %}
+              {%- if kind == 'plug_unavailable' %}{{ states(plug_entity) not in ['unavailable', 'unknown'] }}
+              {%- elif kind == 'low_battery' %}{{ b | float(-1) >= low_level | float(35) }}
+              {%- elif kind == 'not_charging' or (kind == 'no_power' and not has_power) %}
+                {{- not (p_on and b | float(-1) <= fault_level) }}
+              {%- elif kind == 'no_power' %}{{ not (p_on and is_state(power_entity, 'off')) }}
+              {%- elif not has_power %}{{ not (p_off and b | float(101) >= fault_level) }}
+              {%- else %}{{ not (p_off and is_state(power_entity, 'on')) }}{% endif %}
+            timeout: "{{ ((low_minutes if kind == 'low_battery' else grace_minutes) | float(5)) * 60 if recheck else 0 }}"
+            continue_on_timeout: true
+          # A plug fault is re-raised only if the plug has not changed since the restart. If it has (the keeper
+          # switched it at the restart, say), the plug's own trigger sees the change and raises the fault when
+          # it holds; raising it here as well would send it twice.
+          - condition: template
+            value_template: >-
+              {{ not recheck
+                 or (not wait.completed
+                     and (kind == 'low_battery' or states[plug_entity] is none
+                          or as_timestamp(states[plug_entity].last_changed) == recheck_mark | float(0))) }}
+          - variables:
+              status: fault
+              battery: "{{ states(battery_entity) }}"
+              message: >-
+                {% if detected and trigger.event.data.get('message') %}{{ trigger.event.data.message }}
+                {%- elif kind == 'no_power' %}{{ plug_name }} is on but the device reports no power. Check the
+                cable and the plug. Battery {{ battery }}%.
+                {%- elif kind == 'power_without_plug' %}{{ plug_name }} is off but the device still reports
+                power; the plug may be stuck on. Battery {{ battery }}%.
+                {%- elif kind == 'plug_unavailable' %}{{ plug_name }} is unreachable; charging cannot be
+                controlled until it returns. Battery {{ battery }}%.
+                {%- else %}Battery has been below {{ low_level | int }}% for {{ low_minutes | int }} min
+                ({{ battery }}%); check the charger.{% endif %}
+          # Charging is the safe state, but a stuck relay cannot be fixed by a command and an unreachable plug
+          # cannot hear one.
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ turn_on_at_fault and kind not in ['power_without_plug', 'plug_unavailable']
+                     and not is_state(plug_entity, 'on') }}
+            then:
+              - action: homeassistant.turn_on
+                continue_on_error: true
+                target:
+                  entity_id: "{{ plug_entity }}"
+          - sequence: !input fault_action
+          # Cleared = the fault stopped holding, then did not hold again for 5 minutes. Both waits test the STATE,
+          # not a change: a wait_for_trigger would miss a relapse between the two steps (a template trigger
+          # fires only on false -> true after it is armed), and the plug switched on above can end the fault
+          # before the first wait starts.
+          - repeat:
+              sequence:
+                - wait_template: *fault_gone
+                - wait_template: >-
+                    {% set b = states(battery_entity) %}
+                    {%- set p_on, p_off = is_state(plug_entity, 'on'), is_state(plug_entity, 'off') %}
+                    {%- if kind == 'plug_unavailable' %}{{ states(plug_entity) in ['unavailable', 'unknown'] }}
+                    {%- elif kind == 'low_battery' %}{{ b | float(-1) < low_level | float(35) }}
+                    {%- elif kind == 'not_charging' or (kind == 'no_power' and not has_power) %}
+                      {{- p_on and b | float(-1) <= fault_level }}
+                    {%- elif kind == 'no_power' %}{{ p_on and is_state(power_entity, 'off') }}
+                    {%- elif not has_power %}{{ p_off and b | float(101) >= fault_level }}
+                    {%- else %}{{ p_off and is_state(power_entity, 'on') }}{% endif %}
+                  timeout:
+                    minutes: 5
+                  continue_on_timeout: true
+              until:
+                - condition: template
+                  value_template: "{{ not wait.completed }}"
+          - variables:
+              status: clear
+              battery: "{{ states(battery_entity) }}"
+              message: >-
+                {% set on = is_state(plug_entity, 'on') %}
+                {%- if kind == 'not_charging' %}{{ plug_name }}:
+                {{ 'the battery is rising again' if on else 'charging phase ended' }} ({{ battery }}%).
+                {%- elif kind == 'no_power' and not has_power %}{{ plug_name }}:
+                {{ 'the battery is rising, power is reaching the device' if on else 'charging phase ended' }} ({{ battery }}%).
+                {%- elif kind == 'no_power' and not on %}{{ plug_name }}: the plug was turned off; the cable is tested
+                at the next turn-on. Battery {{ battery }}%.
+                {%- elif kind == 'no_power' %}{{ plug_name }}: the device sees power again. Battery {{ battery }}%.
+                {%- elif kind == 'power_without_plug' and on %}{{ plug_name }}: the plug is on again; the relay is
+                tested at the next turn-off. Battery {{ battery }}%.
+                {%- elif kind == 'power_without_plug' and not has_power %}{{ plug_name }}: the battery is draining
+                again with the plug off ({{ battery }}%).
+                {%- elif kind == 'power_without_plug' %}{{ plug_name }} is switching normally again. Battery {{ battery }}%.
+                {%- elif kind == 'plug_unavailable' %}{{ plug_name }} is reachable again. Battery {{ battery }}%.
+                {%- else %}Battery is back above {{ low_level | int }}% ({{ battery }}%).{% endif %}
+          - sequence: !input fault_action
+
+      # ---- WATCH: the plug turned on or off (or a restart). The branches below run side by side and only
+      # detect; each hands its fault to a run of its own through battery_optimizer_internal. Their variables
+      # have names of their own (base / nc_level, rbase / np_level, obase), because the branches share them. ----
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['watch', 'restart'] }}"
+        sequence:
+          - variables:
+              plug_mark: "{{ as_timestamp(states[plug_entity].last_changed) if states[plug_entity] else 0 }}"
+          # A restart is also the keeper's re-check: the plug may have been switched while nothing watched.
+          - if:
+              - condition: template
+                value_template: "{{ trigger.id == 'restart' }}"
+            then: *keeper
+          # A reload keeps the runs of an automation it did not change (Home Assistant replaces only changed
+          # ones): then nothing was lost, and a second watch would double the first. `current` counts this
+          # automation's runs when the trigger fired, so 0 means a fresh start. A Home Assistant start is always
+          # fresh, so it skips the count: a keeper run started by a sensor coming up at the same moment would
+          # otherwise be counted as a survivor. (The same could happen at a reload, but a keeper run lasts as
+          # long as one plug command, and a reload is rare.)
+          - condition: template
+            value_template: >-
+              {{ trigger.id == 'watch' or trigger.platform == 'homeassistant'
+                 or ((this or {}).get('attributes', {}).get('current', 0) | int(0)) == 0 }}
+          # The inferred watches below belong to the run of the plug's phase. If the restart's keeper switched the
+          # plug, that change started a `watch` run of its own, which owns the new phase; watching it here as well
+          # would raise each inferred fault twice.
+          - variables:
+              own_phase: >-
+                {{ trigger.id == 'watch'
+                   or (states[plug_entity] is not none
+                       and as_timestamp(states[plug_entity].last_changed) == plug_mark | float(0)) }}
+          - parallel:
+              # Restart / reload: the runs that were waiting for a clear are gone, so their notifications would
+              # stay forever. Send one reset (a notifier withdraws every tag in fault_ids), then hand each
+              # trigger-seen fault to a run that raises it again if it holds through its grace period. Without a
+              # plugged-in sensor, no_power and power_without_plug are found again by the watches beside this.
+              - if:
+                  - condition: template
+                    value_template: "{{ trigger.id == 'restart' }}"
+                then:
+                  - variables:
+                      status: reset
+                      kind: all
+                      fault_id: "{{ fault_prefix }}"
+                      battery: "{{ states(battery_entity) }}"
+                      message: "{{ plug_name }}: the charger watch restarted; earlier alerts are withdrawn."
+                  - sequence: !input fault_action
+                  - repeat:
+                      for_each: >-
+                        {{ ['plug_unavailable', 'low_battery'] + (['no_power', 'power_without_plug'] if has_power else []) }}
+                      sequence:
+                        - event: battery_optimizer_internal
+                          event_data:
+                            plug_entity: "{{ plug_entity }}"
+                            kind: "{{ repeat.item }}"
+                            recheck: true
+                            plug_mark: "{{ plug_mark }}"
+
+              # not_charging: raise when the plug has been on `settle_minutes` (counted from the plug's
+              # last_changed, which a restart resets), the device idle `idle_minutes`, and the battery has fallen
+              # `fall_percent` below its level when the device last went idle (or charging started, if later).
+              # A fall while the device was busy is expected on a slow charger and must not count once it idles;
+              # without an idle sensor the fall counts from the start of charging. After the fault clears the
+              # level is taken again, so a second fault needs a second fall. Ends when the plug is no longer on.
+              - if:
+                  - condition: template
+                    value_template: "{{ own_phase and is_state(plug_entity, 'on') }}"
+                then:
+                  - repeat:
+                      sequence:
+                        - wait_template: >-
+                            {{ not is_state(plug_entity, 'on')
+                               or (is_number(states(battery_entity)) and (not has_idle or is_state(idle_entity, 'on'))) }}
+                        - variables:
+                            base: "{{ states(battery_entity) | float(0) }}"
+                            idle_mark: "{{ as_timestamp(states[idle_entity].last_changed) if has_idle else 0 }}"
+                        # also ends early when the phase ends or the device stops being idle (a new idle period
+                        # takes a new base)
+                        - wait_template: >-
+                            {% set p = states[plug_entity] %}
+                            {% set b = states(battery_entity) %}
+                            {% set i = states[idle_entity] if has_idle else none %}
+                            {{ p is none or p.state != 'on'
+                               or (has_idle and (i is none or i.state != 'on' or as_timestamp(i.last_changed) != idle_mark))
+                               or ((now() - p.last_changed).total_seconds() >= (settle_minutes_in | float(60)) * 60
+                                   and is_number(b) and b | float <= base - (fall_percent | float(2))
+                                   and (not has_idle or (now() - i.last_changed).total_seconds() >= (idle_minutes_in | float(45)) * 60)) }}
+                        - if:
+                            - condition: template
+                              value_template: >-
+                                {% set b = states(battery_entity) %}
+                                {{ is_state(plug_entity, 'on') and is_number(b) and b | float <= base - (fall_percent | float(2))
+                                   and (not has_idle or (is_state(idle_entity, 'on')
+                                                         and as_timestamp(states[idle_entity].last_changed) == idle_mark)) }}
+                          then:
+                            - variables:
+                                nc_level: "{{ states(battery_entity) | float(0) }}"
+                            - event: battery_optimizer_internal
+                              event_data:
+                                plug_entity: "{{ plug_entity }}"
+                                kind: not_charging
+                                fault_level: "{{ nc_level }}"
+                                message: >-
+                                  {{ plug_name }}: charging for {{ ((now() - states[plug_entity].last_changed).total_seconds() / 60) | int }}
+                                  min but the battery fell from {{ base | int }}% to {{ nc_level | int }}%{{ ' with the device idle' if has_idle else '' }}.
+                                  The charger is not delivering.
+                            # take a new base only once the fault has cleared (the same rule as its run)
+                            - repeat:
+                                sequence:
+                                  - wait_template: "{{ not is_state(plug_entity, 'on') or states(battery_entity) | float(-1) > nc_level }}"
+                                  - wait_template: "{{ is_state(plug_entity, 'on') and states(battery_entity) | float(-1) <= nc_level }}"
+                                    timeout:
+                                      minutes: 5
+                                    continue_on_timeout: true
+                                until:
+                                  - condition: template
+                                    value_template: "{{ not wait.completed }}"
+                      until:
+                        - condition: template
+                          value_template: "{{ not is_state(plug_entity, 'on') }}"
+
+              # no_power without a plugged-in sensor ("Expect a rise within" set): raise when the plug has been on,
+              # and the device idle, `rise_minutes` without the battery rising at all. One rise proves this phase's
+              # charger works; the branch then rests until the phase ends.
+              - if:
+                  - condition: template
+                    value_template: "{{ own_phase and is_state(plug_entity, 'on') and not has_power and rise_minutes_in | float(0) > 0 }}"
+                then:
+                  - repeat:
+                      sequence:
+                        - wait_template: >-
+                            {{ not is_state(plug_entity, 'on')
+                               or (is_number(states(battery_entity)) and (not has_idle or is_state(idle_entity, 'on'))) }}
+                        - variables:
+                            rbase: "{{ states(battery_entity) | float(0) }}"
+                            rmark: "{{ as_timestamp(states[idle_entity].last_changed) if has_idle else 0 }}"
+                        - wait_template: >-
+                            {% set i = states[idle_entity] if has_idle else none %}
+                            {{ not is_state(plug_entity, 'on') or states(battery_entity) | float(-1) > rbase
+                               or (has_idle and (i is none or i.state != 'on' or as_timestamp(i.last_changed) != rmark)) }}
+                          timeout: "{{ (rise_minutes_in | float(0)) * 60 }}"
+                          continue_on_timeout: true
+                        - if:
+                            - condition: template
+                              value_template: "{{ not wait.completed and is_state(plug_entity, 'on') }}"
+                          then:
+                            - variables:
+                                np_level: "{{ states(battery_entity) | float(0) }}"
+                            - event: battery_optimizer_internal
+                              event_data:
+                                plug_entity: "{{ plug_entity }}"
+                                kind: no_power
+                                fault_level: "{{ np_level }}"
+                                message: >-
+                                  {{ plug_name }}: on for {{ rise_minutes_in | int }} min{{ ' with the device idle' if has_idle else '' }}
+                                  and the battery has not risen ({{ np_level | int }}%). Check the cable and the plug.
+                            # watch again only once the fault has cleared (the same rule as its run)
+                            - repeat:
+                                sequence:
+                                  - wait_template: "{{ not is_state(plug_entity, 'on') or states(battery_entity) | float(-1) > np_level }}"
+                                  - wait_template: "{{ is_state(plug_entity, 'on') and states(battery_entity) | float(-1) <= np_level }}"
+                                    timeout:
+                                      minutes: 5
+                                    continue_on_timeout: true
+                                until:
+                                  - condition: template
+                                    value_template: "{{ not wait.completed }}"
+                          else:
+                            - if:
+                                - condition: template
+                                  value_template: "{{ is_state(plug_entity, 'on') and states(battery_entity) | float(-1) > rbase }}"
+                              then:
+                                - wait_template: "{{ not is_state(plug_entity, 'on') }}"
+                      until:
+                        - condition: template
+                          value_template: "{{ not is_state(plug_entity, 'on') }}"
+
+              # power_without_plug without a plugged-in sensor: raise when the battery has risen
+              # `unplugged_rise_percent` above its level when the plug turned off. A battery cannot charge itself.
+              # One fault per off phase; ends when the plug is no longer off.
+              - if:
+                  - condition: template
+                    value_template: "{{ own_phase and is_state(plug_entity, 'off') and not has_power }}"
+                then:
+                  - wait_template: "{{ not is_state(plug_entity, 'off') or is_number(states(battery_entity)) }}"
+                  - variables:
+                      obase: "{{ states(battery_entity) | float(0) }}"
+                  - wait_template: >-
+                      {{ not is_state(plug_entity, 'off')
+                         or states(battery_entity) | float(-1) >= obase + (unplugged_rise_in | float(2)) }}
+                  - if:
+                      - condition: template
+                        value_template: "{{ is_state(plug_entity, 'off') }}"
+                    then:
+                      - event: battery_optimizer_internal
+                        event_data:
+                          plug_entity: "{{ plug_entity }}"
+                          kind: power_without_plug
+                          fault_level: "{{ states(battery_entity) | float(0) }}"
+                          message: >-
+                            {{ plug_name }} is off but the battery rose from {{ obase | int }}% to {{ states(battery_entity) }}%;
+                            the plug may be stuck on.
+
+# One run per fault and per plug phase, plus the keeper's short runs. A failing plug can bounce many times a
+# minute, and each bounce starts a watch (the old ones end, but only once their wait sees the change); 30 leaves
+# room for that and for the fault and keeper runs beside them. Past it, the newest run is dropped without a log
+# entry: a dropped keeper run is repaired by the next re-check.
+mode: parallel
+max: 30
+max_exceeded: silent

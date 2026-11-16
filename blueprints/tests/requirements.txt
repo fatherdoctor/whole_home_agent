@@ -1,0 +1,2 @@
+# Python 3.13. The plugin pins Home Assistant (0.13.316 = HA 2026.2.3, the version these tests last passed on).
+pytest-homeassistant-custom-component==0.13.316

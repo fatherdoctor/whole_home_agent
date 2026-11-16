@@ -1,0 +1,247 @@
+# notification_router.yaml - one place every message to a phone goes through.
+# Status: template (O3b, 2026-10-13). Copied to ha/packages/notification_router.yaml by the Phase 1 generation
+# (interview/generated-files.md) and filled from house/docs/notifications.md. Principle:
+# principles/notifications-and-tiers.md (rule numbers below are its rules). The decisions live in
+# ha/custom_templates/notify.jinja (copy templates/custom_templates/notify.jinja with this file); this package
+# only wires them up. Needs `packages: !include_dir_named packages` in configuration.yaml.
+#
+# WHAT THE INTERVIEW FILLS (search for FILL):
+#   1. PHONES in script.notify: one line per household phone, from docs/notifications.md section 2. The notify
+#      service is read from the box (Settings > Tools > Actions, "notify.mobile_app_..."), never guessed.
+#   2. One input_select.notify_level_<label> per phone, below. No `initial:` - the level is the person's dial,
+#      set once in the UI and restored after restarts. A NEW phone starts at "Everything" until its person says
+#      otherwise; a minor's phone is set by the owner.
+#   3. The slot list (SLOTS) in notify.jinja, for this house's tags (rule 8).
+#
+# HOW TO CALL IT (every caller, every time - rule 1):
+#   - action: script.notify
+#     data:
+#       class: security          # life_safety | alarm | security | reminder | house | health | maintainer
+#       title: Front door
+#       message: "Front door unlocked at {{ now().strftime('%-I:%M %p') }} by the keypad."
+#       tag: front_door_unlocked # optional; related tags share a phone-side slot (notify.jinja SLOTS)
+#       actions: []              # optional buttons; a minor's phone always gets Dismiss only
+#       critical: false          # honored only for alarm and life_safety (rule 13)
+#       dry_run: false           # true: decide and log, deliver nothing
+#
+# NEVER test the house by calling this script for real (rule 6): use dry_run: true and read the
+# notify_router_call event (Settings > Tools > Events, listen to notify_router_call), then let the owner send.
+#
+# TEST MODE (rule 6, rule 25): to exercise a PRODUCTION automation (a leak alert, the health fault push) from a
+# simulated state without editing it, the owner switches input_boolean.notify_test_mode on first. Every call is
+# then a dry run - decided and logged with test_mode: true, delivered to nobody - except life_safety, which
+# always delivers (rule 3), so never simulate a smoke, CO or leak-that-floods trigger in test mode. Test mode
+# switches itself off after two hours and is a health notice while on (health.jinja, system).
+#
+# NOT HERE, ON PURPOSE: texts and calls (rules 15-19: a separate, consent-gated design, never built unattended),
+# speech (rule 23), the noise budget per hazard (rule 22; add it in the caller that owns the hazard).
+
+input_boolean:
+  notifications_enabled:
+    name: Phone notifications
+    icon: mdi:bell
+    # No `initial:` - restored after restarts. Off is itself a health fault (health_check.yaml, system).
+  notify_test_mode:
+    name: Notification test mode
+    icon: mdi:test-tube
+    # On: every push except life safety is a dry run (see TEST MODE above). Off by default, expires after two
+    # hours (automation notify_test_mode_expires), and a health notice while on - a mute must end by itself.
+
+input_select:
+  # FILL: one per phone in PHONES. Options are the four levels of rule 2, in this order, exactly.
+  notify_level_owner:
+    name: Owner phone notifications
+    options: ["Nothing", "Alarms only", "Security and reminders", "Everything"]
+    icon: mdi:cellphone-message
+  notify_level_adult:
+    name: Adult phone notifications
+    options: ["Nothing", "Alarms only", "Security and reminders", "Everything"]
+    icon: mdi:cellphone-message
+
+script:
+  notify:
+    alias: Notify - Router
+    description: >-
+      The one entry point for every phone push (principles/notifications-and-tiers.md rule 1). The caller names a
+      class; notify.jinja decides who gets it, the phone-side slot and the payload. Fires notify_router_call
+      before delivering, always, so a dry run can be read back.
+    mode: parallel
+    max: 20
+    fields:
+      class:
+        description: life_safety, alarm, security, reminder, house, health or maintainer. Missing or unknown = security.
+        selector:
+          select:
+            options: [life_safety, alarm, security, reminder, house, health, maintainer]
+      title:
+        selector:
+          text:
+      message:
+        required: true
+        selector:
+          text:
+      tag:
+        description: Related tags share one phone-side slot, so the newest replaces the oldest.
+        selector:
+          text:
+      actions:
+        description: Optional buttons, each {action, title}. A minor's phone gets Dismiss only.
+        selector:
+          object:
+      critical:
+        description: Break through silent mode. Honored only for alarm and life_safety.
+        selector:
+          boolean:
+      dry_run:
+        description: Decide and log; deliver nothing.
+        selector:
+          boolean:
+    variables:
+      # FILL: one entry per household phone (docs/notifications.md section 2).
+      #   label         plain name, used in the push log
+      #   service       the Companion app notify service, read from the box
+      #   level_helper  its input_select above
+      #   platform      ios | android (the payload differs)
+      #   owner: true   receives the maintainer class (rule 4)
+      #   minor: true   Dismiss only, never buttons (rule 14)
+      phones:
+        - label: Owner
+          service: notify.mobile_app_owner_phone
+          level_helper: input_select.notify_level_owner
+          platform: ios
+          owner: true
+        - label: Adult
+          service: notify.mobile_app_adult_phone
+          level_helper: input_select.notify_level_adult
+          platform: android
+    sequence:
+      - variables:
+          n_class: >-
+            {% from 'notify.jinja' import notify_class %}{{ notify_class(class | default('', true)) }}
+          n_tag: "{{ tag | default('', true) }}"
+          n_slot: >-
+            {% from 'notify.jinja' import notify_slot %}{{ notify_slot(n_tag, (now().timestamp() * 1000) | int) }}
+          n_actions: "{{ actions | default([], true) }}"
+          n_critical: "{{ critical | default(false, true) }}"
+          n_dry: >-
+            {% from 'notify.jinja' import notify_dry %}{{ notify_dry(dry_run | default(false, true), class | default('', true), 'input_boolean.notify_test_mode') }}
+          n_test: "{{ is_state('input_boolean.notify_test_mode', 'on') }}"
+          n_title: "{{ title | default('Home', true) }}"
+          recipients: >-
+            {% from 'notify.jinja' import notify_recipients %}
+            {{ notify_recipients(phones | to_json, n_class, n_tag, 'input_boolean.notifications_enabled') | from_json }}
+      # The record of every decision, dry run or not: the push log and the tests read this, not the phones.
+      - event: notify_router_call
+        event_data:
+          class: "{{ n_class }}"
+          tag: "{{ n_tag }}"
+          slot: "{{ n_slot }}"
+          title: "{{ n_title }}"
+          message: "{{ message }}"
+          critical: "{{ n_critical }}"
+          dry_run: "{{ n_dry }}"
+          test_mode: "{{ n_test }}"
+          to: "{{ recipients | map(attribute='label') | list }}"
+      - if:
+          - condition: template
+            value_template: "{{ n_dry | bool }}"
+        then:
+          - stop: dry run
+      # Every phone on its own: one failed send (a phone removed from the app) must not stop the others.
+      # The health count notices a phone whose service is gone; this loop only keeps going.
+      - repeat:
+          for_each: "{{ recipients }}"
+          sequence:
+            - action: "{{ repeat.item.service }}"
+              continue_on_error: true
+              data:
+                title: "{{ n_title }}"
+                message: "{{ message }}"
+                data: >-
+                  {% from 'notify.jinja' import notify_payload %}
+                  {{ notify_payload(repeat.item | to_json, n_class, n_slot, n_actions | to_json, n_critical) | from_json }}
+
+  notify_clear:
+    alias: Notify - Clear
+    description: >-
+      Clear a slot on every phone when its problem is resolved (rule 8). Sent twice, a few seconds apart, because
+      a phone that was asleep can miss the first. Never clear a slot that a flow re-pushes on.
+    mode: queued
+    fields:
+      tag:
+        required: true
+        selector:
+          text:
+    variables:
+      # FILL: the same services as PHONES in script.notify, in the same order. Typed twice because a script
+      # cannot read another script's variables; the kit's test (templates/tests/) fails when the two differ,
+      # so run it after every phone change.
+      services: ["notify.mobile_app_owner_phone", "notify.mobile_app_adult_phone"]
+      n_slot: "{% from 'notify.jinja' import notify_slot %}{{ notify_slot(tag, 0) }}"
+    sequence:
+      - repeat:
+          count: 2
+          sequence:
+            - repeat:
+                for_each: "{{ services }}"
+                sequence:
+                  - action: "{{ repeat.item }}"
+                    continue_on_error: true
+                    data:
+                      message: clear_notification
+                      data:
+                        tag: "{{ n_slot }}"
+                        ttl: 0
+                        priority: high
+            - delay: "00:00:05"
+
+automation:
+  - id: notify_switched_off_notice
+    alias: Notify - Switched Off Notice
+    description: >-
+      Phone notifications going off is itself a fault and gets exactly one push (health-checks.md rule 12). The
+      router lets tag notifications_off through for 60 s after the switch changes; nothing else passes.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.notifications_enabled
+        from: "on"
+        to: "off"
+    actions:
+      - action: script.notify
+        data:
+          class: maintainer
+          tag: notifications_off
+          title: Phone notifications are off
+          message: >-
+            Phone notifications were switched off at {{ now().strftime('%-I:%M %p') }}. Nothing but life-safety
+            alerts (fire, CO) will reach a phone until they are switched back on.
+
+  - id: notify_test_mode_expires
+    alias: Notify - Test Mode Expires
+    description: >-
+      Test mode is a mute, and a mute must end by itself (rule 25): two hours after it goes on, it goes off and
+      the owner is told once. A restart also ends it, whatever the time left.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.notify_test_mode
+        to: "on"
+        for: "02:00:00"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.notify_test_mode
+        state: "on"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.notify_test_mode
+      - action: script.notify
+        data:
+          class: maintainer
+          tag: notify_test_mode
+          title: Notification test mode ended
+          message: >-
+            Test mode has switched itself off (two hours passed, or Home Assistant restarted). Phones get real pushes again.

@@ -1,0 +1,94 @@
+{#- notify.jinja - the notification router's decisions, written once.
+    Status: template (O3b, 2026-10-13). Copied to ha/custom_templates/notify.jinja by the Phase 1 generation
+    (interview/generated-files.md). Read by script.notify in packages/notification_router.yaml and by the tests in
+    the kit's templates/tests/. Principle: principles/notifications-and-tiers.md (rule numbers below are its rules).
+
+    Arguments named *_json take a JSON string or the list/dict itself: Home Assistant turns a rendered "[]" back
+    into a list, so a macro must not care which it gets. Results are JSON strings; a script variable that holds
+    one ends in `| from_json` so it is always a native list or dict.
+
+    Every decision the router makes is a macro here, so the script, the push log and the tests all read the same
+    logic and nothing re-implements it (health-checks.md rule 1 applies to the router too).
+-#}
+
+{#- Class -> the level a phone needs (rule 2). Unknown classes fall to 2, never to "nobody". -#}
+{%- set NEED = {"life_safety": 0, "alarm": 1, "security": 2, "reminder": 2, "house": 2,
+                "health": 3, "maintainer": 3} -%}
+{%- set LEVELS = {"Nothing": 0, "Alarms only": 1, "Security and reminders": 2, "Everything": 3} -%}
+
+{#- Caller tag -> the phone-side slot (rule 8): related states share one slot, so the newest replaces the oldest.
+    The interview adds this house's tags; a tag not listed is its own slot. -#}
+{%- set SLOTS = {"alarm_armed": "alarm_state", "alarm_disarmed": "alarm_state", "alarm_arming": "alarm_state",
+                 "power_lost": "power", "power_restored": "power",
+                 "leak_detected": "leak", "leak_cleared": "leak"} -%}
+
+{%- macro notify_class(cls) -%}
+{{- cls if cls in NEED else "security" -}}
+{%- endmacro -%}
+
+{%- macro notify_slot(tag, stamp) -%}
+{#- No tag: a unique one, so the push can still be dismissed and cleared. `stamp` is the caller's time in ms. -#}
+{{- SLOTS.get(tag, tag) if tag else "note_" ~ stamp -}}
+{%- endmacro -%}
+
+{%- macro notify_switch_on(switch, tag) -%}
+{#- The master switch, plus the one exception (health-checks.md rule 12): the "notifications were switched off"
+    push itself is let through for 60 s after the switch goes off. -#}
+{%- set s = expand(switch) | first | default(none) -%}
+{{- (s is not none and s.state == "on")
+    or (tag == "notifications_off" and s is not none
+        and (now() - s.last_changed).total_seconds() < 60) -}}
+{%- endmacro -%}
+
+{%- macro notify_dry(dry_run, cls, test_switch) -%}
+{#- Deliver nothing? True when the caller asked for a dry run, or when the house's test switch is on (rule 6:
+    the owner switches it on before a simulated-state test, so a production automation can be exercised without
+    reaching a phone). Life safety ignores the test switch (rule 3): a real fire during a test must still reach
+    every phone, so never simulate a life-safety trigger; a caller's own dry_run still applies to it. -#}
+{%- set s = expand(test_switch) | first | default(none) -%}
+{{- (dry_run | string | lower in ["true", "1", "yes", "on"])
+    or (s is not none and s.state == "on" and notify_class(cls) != "life_safety") -}}
+{%- endmacro -%}
+
+{%- macro notify_recipients(phones_json, cls, tag, switch) -%}
+{#- The phones that receive this push, as JSON. phones_json: the PHONES list from the package.
+    - life_safety: every phone, whatever its level, whatever the switch (rule 3).
+    - maintainer: owner phones only (rule 4).
+    - otherwise: the switch must be on, and the phone's level >= the class's need (rule 2).
+    A phone whose level helper is missing or unknown counts as "Everything" (3): a broken helper must not
+    silence a phone. -#}
+{%- set c = notify_class(cls) -%}
+{%- set need = NEED[c] -%}
+{%- set on = notify_switch_on(switch, tag) == "True" -%}
+{%- set ns = namespace(out=[]) -%}
+{%- for p in (phones_json | from_json if phones_json is string else phones_json) -%}
+  {%- set level = LEVELS.get(states(p.level_helper), 3) -%}
+  {%- if c == "life_safety"
+        or (on and level >= need and (c != "maintainer" or p.get("owner", false))) -%}
+    {%- set ns.out = ns.out + [p] -%}
+  {%- endif -%}
+{%- endfor -%}
+{{- ns.out | to_json -}}
+{%- endmacro -%}
+
+{%- macro notify_payload(phone_json, cls, slot, actions_json, critical) -%}
+{#- The Companion app `data` for one phone, as JSON.
+    - Every push: the slot as tag, high priority, no expiry (rule 13).
+    - Actions: the caller's, or a single Dismiss (rule 8). A minor's phone gets Dismiss only (rule 14).
+    - Critical: only for the alarm and life_safety classes, and only when the caller asks (rule 13). -#}
+{%- set p = phone_json | from_json if phone_json is string else phone_json -%}
+{%- set c = notify_class(cls) -%}
+{%- set acts = (actions_json | from_json if actions_json is string else actions_json) or [] -%}
+{%- set dismiss = [{"action": "DISMISS", "title": "Dismiss"}] -%}
+{%- set acts = dismiss if (p.get("minor", false) or not acts) else acts -%}
+{%- set crit = (critical | string | lower in ["true", "1", "yes", "on"]) and c in ["alarm", "life_safety"] -%}
+{%- set d = {"tag": slot, "actions": acts, "action_data": {"tag": slot}} -%}
+{%- if p.get("platform", "android") == "ios" -%}
+  {%- set extra = {"push": {"interruption-level": "critical" if crit else "time-sensitive",
+                            "sound": {"name": "default", "critical": 1, "volume": 1.0} if crit else "default"}} -%}
+{%- else -%}
+  {%- set extra = {"ttl": 0, "priority": "high"} -%}
+  {%- if crit -%}{%- set extra = dict(extra, channel="alarm_stream") -%}{%- endif -%}
+{%- endif -%}
+{{- dict(d, **extra) | to_json -}}
+{%- endmacro -%}

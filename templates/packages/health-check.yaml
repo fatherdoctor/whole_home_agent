@@ -1,0 +1,176 @@
+# health_check.yaml - one integer health count per subsystem, faults that page and notices that never do.
+# Status: template (O3b, 2026-10-13). Copied to ha/packages/health_check.yaml by the Phase 1 generation
+# (interview/generated-files.md) and filled from house/docs/health-checks.md. Principle: principles/health-checks.md
+# (rule numbers below are its rules). Every check lives in ha/custom_templates/health.jinja (copy
+# templates/custom_templates/health.jinja with this file): add a check there, never in a card or here.
+# Needs the notification router (notification_router.yaml) first: health pushes go through it, maintainer class,
+# owner only (rule 12).
+#
+# WHAT THE INTERVIEW FILLS (search for FILL):
+#   1. The subsystems: one sensor below per key of CHECKS in health.jinja. The four here are the usual start;
+#      drop one the house does not have, never leave a sensor whose CHECKS list is empty.
+#   2. The watched automations: the `enabled` checks in health.jinja must name BOTH automations below (rule 6).
+#   3. Thresholds: the battery helpers below; other thresholds sit in the check itself until a person needs to
+#      change them from a page, then they move to an input_number too (rule 9).
+#
+# BEFORE IT IS TRUSTED (rule 8): make every check fire once from a simulated state - Settings > Tools > States,
+# set the source entity to a failing value (it reverts on the next real update), watch the count rise and the
+# push log record a dry-run push. A check that cannot be made to fire is removed.
+#
+# NOT HERE, ON PURPOSE: the daily reminder for things offline since before today (rule 13) and lock pings
+# (rule 5) - both are backlog items once the counts are trusted. A radio coordinator, a Thread border router or
+# the Matter server is an `integration` check (or `is_on` on an app's "running" sensor) in health.jinja, added
+# with that radio's bring-up (adapters/radios/).
+
+input_number:
+  health_battery_fault_pct:
+    name: Battery fault below
+    min: 5
+    max: 50
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:battery-alert
+  health_battery_notice_pct:
+    name: Battery notice below
+    min: 10
+    max: 60
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:battery-low
+  # No `initial:` (restored after restarts). Set once in the UI: 15 and 30 are the usual start (rule 9).
+
+input_datetime:
+  health_planned_restart_until:
+    name: Planned restart until
+    has_date: true
+    has_time: true
+    icon: mdi:restart-alert
+    # Checks marked `suppress: true` are skipped until this time (rule 10). Set it BEFORE a planned reboot,
+    # e.g. now + 20 minutes; it expires by itself, so a forgotten suppression cannot hide a real outage for long.
+
+input_boolean:
+  # The "alert open" flags (rule 7): set when a fault push actually went out, required by the all-clear.
+  # FILL: one per subsystem sensor below.
+  health_alert_open_security:
+    name: Health alert open - security
+  health_alert_open_plumbing:
+    name: Health alert open - plumbing
+  health_alert_open_system:
+    name: Health alert open - system
+  health_alert_open_network:
+    name: Health alert open - network
+
+template:
+  - sensor:
+      # FILL: one per subsystem. Every value comes from the one macro; the attributes are what cards read
+      # (severity, notices, findings), so no card re-implements a check (rule 1) or picks a color (rule 2).
+      - name: Health security
+        unique_id: health_security
+        icon: mdi:shield-check
+        state_class: measurement
+        state: "{% from 'health.jinja' import health %}{{ (health('security') | from_json).faults }}"
+        attributes:
+          notices: "{% from 'health.jinja' import health %}{{ (health('security') | from_json).notices }}"
+          severity: "{% from 'health.jinja' import health %}{{ (health('security') | from_json).severity }}"
+          findings: "{% from 'health.jinja' import health %}{{ (health('security') | from_json).findings }}"
+      - name: Health plumbing
+        unique_id: health_plumbing
+        icon: mdi:water-check
+        state_class: measurement
+        state: "{% from 'health.jinja' import health %}{{ (health('plumbing') | from_json).faults }}"
+        attributes:
+          notices: "{% from 'health.jinja' import health %}{{ (health('plumbing') | from_json).notices }}"
+          severity: "{% from 'health.jinja' import health %}{{ (health('plumbing') | from_json).severity }}"
+          findings: "{% from 'health.jinja' import health %}{{ (health('plumbing') | from_json).findings }}"
+      - name: Health system
+        unique_id: health_system
+        icon: mdi:server
+        state_class: measurement
+        state: "{% from 'health.jinja' import health %}{{ (health('system') | from_json).faults }}"
+        attributes:
+          notices: "{% from 'health.jinja' import health %}{{ (health('system') | from_json).notices }}"
+          severity: "{% from 'health.jinja' import health %}{{ (health('system') | from_json).severity }}"
+          findings: "{% from 'health.jinja' import health %}{{ (health('system') | from_json).findings }}"
+      - name: Health network
+        unique_id: health_network
+        icon: mdi:lan
+        state_class: measurement
+        state: "{% from 'health.jinja' import health %}{{ (health('network') | from_json).faults }}"
+        attributes:
+          notices: "{% from 'health.jinja' import health %}{{ (health('network') | from_json).notices }}"
+          severity: "{% from 'health.jinja' import health %}{{ (health('network') | from_json).severity }}"
+          findings: "{% from 'health.jinja' import health %}{{ (health('network') | from_json).findings }}"
+
+automation:
+  - id: health_fault_push
+    alias: Health - Fault Push
+    description: >-
+      A subsystem's fault count rose and stayed up 5 minutes: one push to the owner naming the new faults, and
+      the alert-open flag set only if the push could go out (rule 7). Notices never push (rule 2). Watched by
+      the health count itself (rule 6) - if this automation is off, that is a fault.
+    mode: queued
+    triggers:
+      # FILL: one entity per subsystem sensor.
+      - trigger: state
+        entity_id: [sensor.health_security, sensor.health_plumbing, sensor.health_system, sensor.health_network]
+        to: ~  # state changes only: attribute churn must not start a run (and its wait) every minute
+        for: "00:05:00"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state | is_number and trigger.from_state.state | is_number
+             and trigger.to_state.state | int > trigger.from_state.state | int }}
+    variables:
+      subsystem: "{{ trigger.entity_id.split('health_')[1] }}"
+      faults: >-
+        {{ (trigger.to_state.attributes.findings | default([], true))
+           | selectattr('severity', 'eq', 'fault') | map(attribute='name') | list }}
+    actions:
+      - action: script.notify
+        data:
+          class: maintainer
+          tag: "health_{{ subsystem }}"
+          title: "Health: {{ subsystem }}"
+          message: >-
+            {{ faults | count }} problem{{ 's' if faults | count != 1 }} in {{ subsystem }}: {{ faults | join(', ') }}.
+            {% for f in trigger.to_state.attributes.findings | selectattr('severity', 'eq', 'fault') -%}
+            {{ f.name }} {{ f.why }}{{ ' ' ~ as_timestamp(f.since) | timestamp_custom('%a %-I:%M %p') if f.since }}.
+            {% endfor %}
+      - if:
+          - condition: state
+            entity_id: input_boolean.notifications_enabled
+            state: "on"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "input_boolean.health_alert_open_{{ subsystem }}"
+
+  - id: health_all_clear_push
+    alias: Health - All Clear Push
+    description: >-
+      A subsystem's fault count is back to 0 for 10 minutes AND a fault push went out for it: one all-clear,
+      replacing the fault push in the same slot, and the flag cleared. No all-clear for a problem nobody heard
+      about (rule 7).
+    mode: queued
+    triggers:
+      # FILL: one entity per subsystem sensor.
+      - trigger: state
+        entity_id: [sensor.health_security, sensor.health_plumbing, sensor.health_system, sensor.health_network]
+        to: "0"
+        for: "00:10:00"
+    variables:
+      subsystem: "{{ trigger.entity_id.split('health_')[1] }}"
+      flag: "input_boolean.health_alert_open_{{ subsystem }}"
+    conditions:
+      - condition: template
+        value_template: "{{ is_state(flag, 'on') }}"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: "{{ flag }}"
+      - action: script.notify
+        data:
+          class: maintainer
+          tag: "health_{{ subsystem }}"
+          title: "Health: {{ subsystem }}"
+          message: "{{ subsystem | capitalize }} is back to normal ({{ now().strftime('%-I:%M %p') }})."

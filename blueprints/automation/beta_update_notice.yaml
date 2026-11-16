@@ -1,0 +1,122 @@
+blueprint:
+  name: Beta update notice
+  author: The Backshop
+  description: >-
+    **v1.0.0.** For a beta tester. Sends one short notice to your phone when an update for one of the
+    integrations or apps you test is ready, and keeps their pre-release (beta) switches on.
+
+
+    **The notice** names the item, the installed version, the version on offer and what kind of build it is:
+    **pre-release** (the version carries a beta marker such as `-beta.1`, `b2` or `rc1`), **stable release**,
+    or **commit build** (the repository has no releases yet, so the version is a short commit hash). Tapping it
+    opens the release page. A newer notice for the same item replaces the older one.
+
+
+    **Pre-release switches.** The Marketplace gives each item a "Pre-release" switch, created disabled. Enable
+    each one in Settings > Entities first, then list it here: at every start the automation turns on any listed
+    switch that is off. Leave the list empty to choose betas yourself on each item's page in the Marketplace.
+    An app (add-on) has no such switch: you get its betas by adding its beta repository instead.
+
+
+    Inputs are never renamed in later versions; new ones are optional.
+  domain: automation
+  homeassistant:
+    min_version: "2025.4.0"
+  input:
+    update_entities:
+      name: Update entities
+      description: >-
+        The update entity of each item you test, for example `update.severe_weather` for an integration from the
+        Marketplace, or the app's update entity from the Supervisor.
+      selector:
+        entity:
+          filter:
+            - domain: update
+          multiple: true
+    notify_action:
+      name: Notify action
+      description: >-
+        The notify action of your phone, for example `notify.mobile_app_my_phone` (Settings > Automations >
+        Actions: search "mobile_app").
+      selector:
+        text:
+    pre_release_switches:
+      name: Pre-release switches (optional)
+      description: >-
+        The "Pre-release" switch of each item, for example `switch.severe_weather_pre_release`. Enable it in
+        Settings > Entities first; a disabled switch has no state and is skipped.
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: switch
+          multiple: true
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input update_entities
+    to: "on"
+    not_from: ["unavailable", "unknown"]
+    id: update
+  - trigger: state
+    entity_id: !input update_entities
+    attribute: latest_version
+    id: newer
+  - trigger: homeassistant
+    event: start
+    id: start
+  - trigger: event
+    event_type: automation_reloaded
+    id: start
+
+variables:
+  notify_action: !input notify_action
+  switches: !input pre_release_switches
+  entity: "{{ trigger.entity_id | default('') }}"
+  installed: "{{ state_attr(entity, 'installed_version') or 'unknown' }}"
+  latest: "{{ state_attr(entity, 'latest_version') or 'unknown' }}"
+  # A short or full commit hash means the repository has no releases yet.
+  commit_build: "{{ latest | lower is match('^[0-9a-f]{7,40}$') }}"
+  # -beta.1, .alpha2, rc1, .dev3, or PEP 440 style 1.2.0b1 / 0.67.0a0. A hash can end like "0b2", so
+  # kind tests commit_build first.
+  pre_release: >-
+    {{ latest | lower is search('(alpha|beta|rc|dev)') or latest | lower is search('[0-9](a|b)[0-9]+$') }}
+  kind: >-
+    {{ 'commit build (no release yet)' if commit_build
+       else 'pre-release' if pre_release else 'stable release' }}
+  name: "{{ state_attr(entity, 'title') or state_attr(entity, 'friendly_name') or entity }}"
+  link: "{{ state_attr(entity, 'release_url') or '' }}"
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.id == 'start'
+         or (trigger.id == 'update' and latest != 'unknown')
+         or (trigger.id == 'newer' and trigger.from_state is not none and trigger.to_state is not none
+             and trigger.from_state.state == 'on' and trigger.to_state.state == 'on'
+             and trigger.to_state.attributes.latest_version is not none
+             and trigger.from_state.attributes.latest_version != trigger.to_state.attributes.latest_version) }}
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'start' }}"
+        sequence:
+          - variables:
+              to_turn_on: "{{ switches | select('is_state', 'off') | list }}"
+          - if: "{{ to_turn_on | count > 0 }}"
+            then:
+              - action: switch.turn_on
+                target:
+                  entity_id: "{{ to_turn_on }}"
+    default:
+      - action: "{{ notify_action }}"
+        data:
+          title: "Update ready: {{ name }}"
+          message: "{{ installed }} -> {{ latest }}, {{ kind }}."
+          data:
+            tag: "beta-update-{{ entity }}"
+            url: "{{ link }}"
+            clickAction: "{{ link }}"

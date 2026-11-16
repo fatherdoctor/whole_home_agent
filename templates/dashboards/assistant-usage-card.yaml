@@ -1,0 +1,122 @@
+# assistant-usage-card.yaml - the assistant usage card: one card, three views, built-in cards only.
+# Status: template (KIT-USE, 2026-10-24). Paste into a dashboard (Edit dashboard > Add card > Manual, or the raw
+# configuration editor under `cards:`). Needs packages/assistant-usage.yaml and custom_templates/usage.jinja.
+#
+# The view picker (input_select.assistant_usage_view) shows one of:
+#   Linear bars - text bars for the week, today and the 5-hour session with the household's limit and the pace line,
+#                 plus two weeks of the weekly % and daily use (statistics graph);
+#   Numbers     - each figure, its limit, the headroom left, the reset time and the read's age;
+#   Tachometer  - dials with a needle and green / amber / red bands.
+# Every view says when the figures are unknown (no read yet, the read is too old, or the window reset since).
+#
+# FILL: the Tachometer's band edges are fixed numbers (built-in gauges cannot read a helper). Set them from the
+# household's thresholds: the week's amber band from the weekly warning level (80 by default), the Today dial's
+# amber band from the daily budget (14.3) and its max at twice the budget. Change them here when the household
+# changes its helpers; the bars and numbers views follow the helpers by themselves.
+type: vertical-stack
+cards:
+  - type: entities
+    title: Assistant usage
+    show_header_toggle: false
+    entities:
+      - entity: input_select.assistant_usage_view
+        name: View
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: binary_sensor.assistant_usage_stale
+        state: "on"
+    card:
+      type: markdown
+      content: >-
+        {% from 'usage.jinja' import usage_age_min %}{% set a = usage_age_min() %}
+        **Usage unknown.** {{ 'No read yet.' if a == 'unknown' else 'Last good read ' ~ a ~ ' min ago.' }}
+        Last try: {{ state_attr('sensor.assistant_usage_read', 'status') or 'none' }}{{
+        (' - ' ~ state_attr('sensor.assistant_usage_read', 'reason')) if state_attr('sensor.assistant_usage_read',
+        'reason') else '' }}.
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.assistant_usage_view
+        state: Linear bars
+    card:
+      type: vertical-stack
+      cards:
+        - type: markdown
+          content: >-
+            {% from 'usage.jinja' import usage_bars_md %}{{
+            usage_bars_md('input_number.assistant_usage_weekly_warning', 'input_number.assistant_usage_daily_budget') }}
+        - type: statistics-graph
+          title: Last two weeks
+          chart_type: line
+          period: day
+          days_to_show: 14
+          stat_types:
+            - max
+          entities:
+            - entity: sensor.assistant_usage_week
+              name: Week
+            - entity: sensor.assistant_usage_today
+              name: Today
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.assistant_usage_view
+        state: Numbers
+    card:
+      type: markdown
+      content: >-
+        {% from 'usage.jinja' import usage_numbers_md %}{{
+        usage_numbers_md('input_number.assistant_usage_weekly_warning', 'input_number.assistant_usage_daily_budget') }}
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.assistant_usage_view
+        state: Tachometer
+    card:
+      type: vertical-stack
+      cards:
+        - type: gauge
+          entity: sensor.assistant_usage_week
+          name: Week
+          min: 0
+          max: 100
+          needle: true
+          segments:
+            - from: 0
+              color: var(--success-color)
+            - from: 80  # FILL: the weekly warning level
+              color: var(--warning-color)
+            - from: 95
+              color: var(--error-color)
+        - type: horizontal-stack
+          cards:
+            - type: gauge
+              entity: sensor.assistant_usage_today
+              name: Today
+              min: 0
+              max: 28.6  # FILL: twice the daily budget
+              needle: true
+              segments:
+                - from: 0
+                  color: var(--success-color)
+                - from: 14.3  # FILL: the daily budget
+                  color: var(--warning-color)
+            - type: gauge
+              entity: sensor.assistant_usage_session
+              name: 5-hour session
+              min: 0
+              max: 100
+              needle: true
+              segments:
+                - from: 0
+                  color: var(--success-color)
+                - from: 80
+                  color: var(--warning-color)
+                - from: 95
+                  color: var(--error-color)
+        - type: markdown
+          content: >-
+            {% set p = states('sensor.assistant_usage_pace_line') %}Pace line {{ p ~ '%' if p | is_number else 'unknown' }} ·
+            weekly limit {{ states('input_number.assistant_usage_weekly_warning') }}% ·
+            daily budget {{ states('input_number.assistant_usage_daily_budget') }}%

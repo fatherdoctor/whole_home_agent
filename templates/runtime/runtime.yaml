@@ -1,0 +1,31 @@
+# house/runtime.yaml - what each assistant runtime can do in this house.
+# Written by STEP 0 (templates/runtime/STEP-0.md), one entry per runtime the household uses, by hand or by
+# templates/runtime/probe_runtime.py. Copy to house/runtime.yaml and fill the FILL values. The kit names model tiers by
+# role (planner, builder, reviewer, mechanical, writer), never by product; you map the roles to the models this
+# runtime offers. Values under `can` are yes / no / unknown (a YAML reader returns yes/no as booleans; a script
+# reading this file accepts both forms).
+runtimes:
+  FILL-runtime-name:                 # one of: claude-code claude-cloud claude-app other (STEP-0.md, the names table)
+    variant: ""                      # free text when it matters: "cloud task", "IDE extension", the product's version
+    detected_on: FILL-YYYY-MM-DD     # the last probe that changed a value or refreshed an entry over 7 days old
+    where: FILL                      # box | cloud | computer (STEP-0.md, "Where you are"); a chat records nothing
+    github: FILL                     # push | read-only | no-reach | none (the same section)
+    model_roles:                     # the models this runtime offers, by the role the kit names
+      planner: FILL                  # plans and sizes the work; the most capable model you have
+      builder: FILL                  # writes the changes
+      reviewer: FILL                 # reviews them; a different model when you have one, else a fresh session
+      mechanical: FILL               # sweeps, counts, extractions; the cheapest model that holds the quality
+      writer: FILL                   # documentation and the wiki
+    can:
+      shell: unknown
+      read_files: unknown
+      write_files: unknown
+      git_push: unknown
+      web: unknown
+      schedule: unknown
+      subagents: unknown
+      long_context: unknown          # yes = 100k tokens or more
+      persistent_memory: unknown
+      box_access: unknown            # yes = the owner confirmed this box (install/agent-access.md section 2, kept in house/profile.yaml) and the read in section 3 passes; no profile yet = unknown
+      notify_owner: unknown
+    fallbacks_in_use: []             # the `can` keys that are no or unknown; one FALLBACKS.md row per key

@@ -1,0 +1,19 @@
+name: starter-check
+# Fails when a source of the chat starter file changed without a rebuild
+# (tools/chat-starter/build_starter.py; fix: run it and commit the result).
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  starter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 tools/chat-starter/build_starter.py --check
+      - run: python3 tools/chat-starter/test_build_starter.py

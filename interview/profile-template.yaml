@@ -1,0 +1,199 @@
+# house/profile.yaml - the house's answers, written by the interviews and read by every session.
+# Status: schema v3 (O2, 2026-10-13; `adoption` block added by KIT-LEVELS, 2026-10-26; `levels_passed` KIT-LEVELS.f 10-27;
+# `setup.existing_house`, `inventoried_on`, `first_look_on`, `existing_repo` for path C, KIT-EXIST.c 2026-10-31). Copy this
+# file to house/profile.yaml at the start of Phase 0 (Phase 0E on an existing house). A v1 file (no `adoption` block)
+# is read as "level unknown": the helper runs the readiness tests in 00-start-here/levels.md upward from level 0 and
+# proposes the block. A v2 file (no `setup.existing_house`) is read as `existing_house: false`: nothing else changed
+# between v2 and v3, so a v2 house never has to rewrite its profile.
+#
+# NEVER a secret here: no code, PIN, password, token, recovery key, phone number, email or street address.
+# Record that a thing exists and where its secret lives (a secrets.yaml key, "password manager"), never the value.
+# Names: first names or roles, the person's choice. Ids: only ones read from the box, never guessed.
+# Any value the person did not decide is written with its default, and its dotted path goes into `assumed` below
+# (people get their own `assumed: true`). Remove a path when the person confirms the value; revisit the rest.
+
+kit_version: 3
+assumed: []               # dotted paths, e.g. [setup.network.router_control, voice.child_rooms]
+timezone: null            # confirmed full IANA name; an abbreviation or UTC offset alone is not enough
+language: en-US           # the house's documents
+
+adoption:                 # the adoption ladder (00-start-here/levels.md); written by the "what next?" helper with the
+                          # person's OK, or by the person; never written upward by an agent on its own
+  level: null             # the highest level in levels_passed; null until level 0 passes
+  level_passed_on: null   # date that level's test last passed in full
+  levels_passed: []       # {level: 0, on: YYYY-MM-DD} per level whose full test passed; a level not listed is not
+                          # passed, whatever `level` says (levels may be skipped above 3; levels.md, "For the helper")
+  tracks: {records: 0, documentation: 0, house: 0}   # the last piece done on each side track; 0 = not started
+  pace: on-request        # on-request | monthly | biweekly | weekly; on-request until level 2
+  paused_until: null      # a date; until then only maintenance suggestions
+  skipped: []             # {piece: H6, on: YYYY-MM-DD, why: ...} for a piece, {piece: L4, ...} for a level; a skipped
+                          # piece is not offered again for 60 days, a skipped level until a later level needs it
+  opted_out: []           # {what: push-guard, on: YYYY-MM-DD, why: ..., undo: ..., checks: [L1-guard]}: a rail changed
+                          # or dropped, or the kit's path left (what: kit-path), by the owner's choice after one
+                          # warning; never restored or re-offered; its checks are never a standing failure
+  last_suggested: null    # date of the last suggestion
+  last_new_piece: null    # date the last new piece was turned on
+  once_done: []           # {check: L0-backup-proven, on: YYYY-MM-DD}: the `once` checks that passed, by check id
+
+setup:                    # Phase 0 (interview/phase-0-setup-interview.md); Phase 0E on an existing house (AGENTS.md)
+  done: false
+  standing_rules: []      # owner's rules stated early, by role and without private details; apply immediately.
+                          # Phase 1 topics 6 and 8 carry these into notifications, agent permissions and policies.md;
+                          # the kit's safety limits still apply, and only the owner may relax a rule
+  interviewed_on: null    # date
+  installed_on: null      # date the install guide's "Done when" list was all checked (path C: "done from evidence")
+  existing_house: false   # true on path C (00-start-here/existing-house.md): the house ran Home Assistant before the
+                          # kit; level 0 then has the five E0 lines (levels.md) and Phase 1 opens each topic from the
+                          # inventory. Set once in Phase 0E; never flipped back
+  inventoried_on: null    # path C: date the read-only inventory was written (house/export/, house/docs/inventory.md);
+                          # E0-inventory says "stale" when the export is older than the profile's last edit
+  first_look_on: null     # path C: date house/docs/first-look.md was written by first_look.py
+  existing_repo:          # path C: the repository the household already kept its configuration in, if any; left as
+                          # it is and named in docs/operations.md as the configuration mirror of record
+    host: null            # a kind, never an address or a token: github | gitlab | gitea | self-hosted | local-only
+    private: null         # true when that repository is private
+  hardware: null          # raspberry-pi | ha-green | mini-pc | proxmox-vm | other
+  install_guide: null     # install/<file>.md from the table in install/README.md (other: the mini PC guide for HAOS on generic x86, else outside the kit)
+  storage: null           # ssd | nvme | emmc | sd-card | virtual-disk
+  hardware_parts: null    # free text when already bought: board + RAM, boot drive + size, supply, case/cooler, radio
+  hardware_evidence: null # hardware kind + read-only source; null = unchecked, never serials or network identifiers.
+                          # Resolve any mismatch with the owner before choosing a guide or writing a disk
+  network:
+    router_control: null  # null = not asked; after asking, an unanswered choice defaults to false, listed in assumed
+                          # true only after the owner agrees; an explicit no is a confirmed answer, not assumed
+    local_access: null    # default-name | current-address | reserved-address; route kind only, never the address
+    wired: null           # true when the box is on a cable
+    wifi_24ghz: null      # true when devices can join a 2.4 GHz network
+    ipv6: null            # true when the home network has IPv6 on (Matter, Thread)
+    mdns_ok: null         # true when discovery reaches the phones (HomeKit, Cast, Matter); network-and-backups-first 1b
+    remote_access: none   # none | nabu-casa | vpn | reverse-proxy
+  cloud_budget: null      # owner's approved Cloud subscription cost and billing period; separate from the AI plan.
+                          # null = no subscription budget approved; offering Cloud never enables it
+  owned_devices: []       # kinds and ecosystems, one line each ("six bulbs on a hub"); never serials or models
+  radios: []              # zigbee | zwave | matter-thread | matter-wifi | wifi; owned or planned
+  voice: []               # alexa | google | apple | assist
+  notification_channels: [companion-app]   # + pushover | telegram | sms (planned ones say "planned")
+  phone_platforms: []     # ios | android, one per household phone
+  backup_offbox: null     # a kind: cloud-drive | nas | computer | nabu-casa; never a path or a credential
+  emergency_kit: null     # a kind: password-manager | printed | both; never where
+  house_rules: not yet    # Careful start | Direct | not yet; templates/house-rules.md
+  agent:
+    name: null            # a name from the names table in templates/runtime/STEP-0.md
+                          # (claude-code | claude-cloud | claude-app | other)
+    runs: laptop          # laptop | on-box | cloud
+    usage_probe: false    # true when the provider shows a usage percentage the probe can read
+  agent_access:           # install/agent-access.md; never the token or a password
+    read: null            # api | addon | person-reads   (addon: the agent runs inside the box, agent-access.md section 0)
+    deploy: null          # ssh | samba | addon | person-pastes | null until the first build
+    admin: false          # true only after a backlog item needed it
+  budget:
+    plan: null            # the plan or allowance, by name
+    buffer_pct: 10        # reserve kept at the end of the week
+    away_buffer_pct: 20   # reserve while the owner is away
+    target: null          # optional earlier finish line, a percent by a time ("95 % by Saturday 10:00"); null = the reset
+    # With no usage percentage to read (usage_probe false), the gate is a count instead:
+    items_per_session: 3  # stop and report after this many backlog items
+    runs_per_day: 0       # unattended runs; 0 until the push guard and a budget gate exist
+  review_cadence: daily   # how often the owner looks at the work
+
+profile:                  # Phase 1 (interview/phase-1-house-profile-interview.md)
+  done: false
+  first_request: null     # the first request to build something, word for word (in Phase 0 or Phase 1); becomes backlog item 1
+  completed_on: null
+  generated_on: null      # date topic 11 last ran; an early stop still generates, with (pending: topic N) values
+  topics:                 # pending | done | assumed. The scripts number them: 1 people, 2 areas, 3 devices,
+                          # 4 priorities, 5 rhythm, 6 notifications, 7 voice, 8 agent, 9 operations, 10 documentation
+    people: pending
+    areas: pending
+    devices: pending
+    priorities: pending
+    rhythm: pending
+    notifications: pending
+    voice: pending
+    agent: pending
+    operations: pending
+    documentation: pending
+
+  people:
+    - label: null                 # first name or role
+      role: owner                 # owner | adult | child | guest | sitter | visitor | emergency-contact
+                                  # visitor = comes regularly, does not stay (dog walker, cleaner, nanny)
+      minor: false
+      phone_platform: null        # ios | android | none
+      notify_level: 3             # 0 nothing | 1 alarms only | 2 security and reminders | 3 everything
+      may_control: [app, voice]   # app | voice | panel | none
+      counts_for_presence: true
+      frequency: null             # for guests, sitters and visitors: how often they are here
+      entry: null                 # visitors and sitters: key | lockbox | code | let-in (code = a design-only item)
+      door_notice: null           # visitors and sitters: may the house notice the door in their usual window: owners-only | no
+      assumed: false
+
+  pets: []                        # {label, kind, indoor: true, roams: true, care_when_away: walker | sitter | none}
+                                  # pets change sensor choices (pet-immune motion) and who must be told when away
+
+  areas:
+    - name: null                  # as typed on the box
+      floor: null
+      kind: shared                # shared | private | child | outdoor | utility
+
+  house_words:
+    presence_modes: [Home, Not Home]
+    guest_mode: Guest staying
+    modes: [Home, Not Home, Night, Guest staying]
+    reserved: []                  # words another system uses, with why: "Away: the alarm's arm mode"
+    nicknames: {}
+
+  devices:
+    integrations: []              # read from the box in topic 0, names as the box shows them
+    owned: []                     # by integration or ecosystem, with counts, from the box
+    planned: []
+    safety_relevant: []           # locks | alarm | garage | water-valve | smoke-co | cameras | heating | medical | ...
+
+  priorities:
+    order: [security, comfort, energy, convenience]
+    never: []                     # what must never happen, one line each
+    must_work_without_ha: []
+    noise_vs_silence: silence-worse-for-safety   # or noise-worse-everywhere
+
+  rhythm:
+    wake: {weekday: null, weekend: null}
+    bed: {weekday: null, weekend: null}
+    quiet_hours: {start: null, end: null}
+    home_in_the_day: []           # labels
+    trips_per_year: null
+
+  notifications:
+    classes: [alarm, security, reminder, house, health, maintainer]   # + life_safety: always on, not a choice
+    events: []                    # {event, class, urgent: false}: which happening uses which class (leak -> security)
+    default_class: security
+    maintainer_to: owner
+    life_safety_everyone: true
+    second_channel: none          # none | planned-call | planned-sms | planned-speaker (planned = design-only item)
+    sitter_gets: [arm-disarm-plain-words, leaks, alarm]   # [] = nothing, on purpose (say so in notifications.md)
+    speech_surfaces: []           # {kind: panel | speaker, area: <name>}
+
+  voice:
+    assistants: []                # alexa | google | apple | assist
+    per_area: {}                  # area name -> assistant
+    exposure: [lights, switches, scene-scripts]
+    child_rooms: own-device-only  # own-device-only | any (Apple/phone assistants cannot be limited per room: any)
+    wake_word: null               # for Assist; the word itself, which is not a secret
+
+  agent:
+    may: [read-all-but-secrets, everything-not-limited]
+    ask_first: [delete, restart, firmware, version-change, safety-list, anything-that-reaches-a-person]
+    never: [codes, contacts, consent] # optional limits: templates/agent-guard-rails.md
+    unattended: false             # true only after the usage probe and the push guard exist
+    tier2_wanted: later           # no | later | yes
+
+  operations:
+    freezes: []                   # {from: date, to: date, why: trip | busy}
+    backup_tiers: []              # the failure tiers this house covers, by label from adapters/hardware.md: [T1, T3]
+    restore_drill: monthly
+    staging: null                 # clone | spare-boot-drive | laptop-vm | drill-only
+
+  documentation:
+    manual: true
+    sitter_track: when-first-expected   # now | when-first-expected | no
+    wiki: schema-now-pages-from-fifth-integration   # now | schema-now-pages-from-fifth-integration | later
+    manual_language: null         # null = the house's language

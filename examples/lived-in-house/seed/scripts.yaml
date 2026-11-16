@@ -1,0 +1,21 @@
+# The fictional lived-in house: 3 scripts. None calls an alarm, lock or notify service.
+movie_time:
+  alias: "Movie time"
+  sequence:
+    - service: light.turn_off
+      target: {entity_id: light.living_room_rgbww_lights}
+    - service: cover.close_cover
+      target: {entity_id: cover.living_room_window}
+good_night:
+  alias: "Good night"
+  sequence:
+    - service: light.turn_off
+      target: {entity_id: all}
+porch_blink:
+  alias: "Porch blink"
+  sequence:
+    - service: light.toggle
+      target: {entity_id: light.entrance_color_white_lights}
+    - delay: "00:00:02"
+    - service: light.toggle
+      target: {entity_id: light.entrance_color_white_lights}

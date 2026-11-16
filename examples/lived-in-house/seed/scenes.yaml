@@ -1,0 +1,11 @@
+# The fictional lived-in house: 2 scenes.
+- id: seed_scene_evening
+  name: "Evening"
+  entities:
+    light.living_room_rgbww_lights: {state: "on", brightness: 120}
+    light.kitchen_lights: {state: "on", brightness: 90}
+- id: seed_scene_bright
+  name: "Bright"
+  entities:
+    light.living_room_rgbww_lights: {state: "on", brightness: 255}
+    light.kitchen_lights: {state: "on", brightness: 255}

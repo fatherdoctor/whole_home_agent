@@ -1,0 +1,129 @@
+# The fictional lived-in house: 14 automations (examples/lived-in-house.md). Paste into the lab's automations.yaml
+# (or each through Settings > Automations > Edit in YAML). Entity ids are the `demo` integration's; the key names
+# each planted fault by number. Nothing here is a real house.
+- id: seed_motion_kitchen            # pattern A: "Category - Target"
+  alias: "Motion - Kitchen"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.movement_backyard
+      to: "on"
+  action:
+    - service: light.turn_on
+      target: {entity_id: light.kitchen_lights}
+- id: seed_motion_hallway            # pattern A
+  alias: "Motion - Hallway"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.movement_backyard
+      to: "on"
+  action:
+    - service: light.turn_on
+      target: {entity_id: light.entrance_color_white_lights}
+- id: seed_motion_office             # pattern A
+  alias: "Motion - Office"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.movement_backyard
+      to: "on"
+  action:
+    - service: light.turn_on
+      target: {entity_id: light.office_rgbw_lights}
+- id: seed_kitchen_motion_lights     # pattern B: snake_case
+  alias: "kitchen_motion_lights"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.movement_backyard
+      to: "off"
+      for: "00:05:00"
+  action:
+    - service: light.turn_off
+      target: {entity_id: light.kitchen_lights}
+- id: seed_bedroom_night_dim         # pattern B; FAULT 9: a filter with no default raises on the missing sensor
+  alias: "bedroom_night_dim"
+  trigger:
+    - platform: state
+      entity_id: input_select.house_mode
+      to: "Night"
+  action:
+    - service: light.turn_on
+      target: {entity_id: light.bed_light}
+      data:
+        brightness_pct: "{{ states('sensor.gone') | float }}"
+- id: seed_living_room_evening_scene # pattern B
+  alias: "living_room_evening_scene"
+  trigger:
+    - platform: sun
+      event: sunset
+  action:
+    - service: scene.turn_on
+      target: {entity_id: scene.evening}
+- id: seed_porch_sunset              # pattern C: a sentence
+  alias: "Turn on porch at sunset"
+  trigger:
+    - platform: sun
+      event: sunset
+  action:
+    - service: light.turn_on
+      target: {entity_id: light.living_room_rgbww_lights}
+- id: seed_midnight_off              # pattern C; FAULT 7: switched off (it ran once by hand, then was turned off)
+  alias: "Turn off the lights at midnight"
+  trigger:
+    - platform: time
+      at: "00:00:00"
+  action:
+    - service: light.turn_off
+      target: {entity_id: all}
+- id: seed_garage_close_night        # pattern C; FAULT 8: on, and never run (leave last_triggered empty)
+  alias: "Close the garage door at night"
+  trigger:
+    - platform: state
+      entity_id: input_select.house_mode
+      to: "Night"
+  action:
+    - service: cover.close_cover
+      target: {entity_id: cover.garage_door}
+- id: seed_leaving_arm_away          # FAULT 6: arms the alarm with no person in the loop, on a person leaving
+  alias: "Leaving - arm alarm"
+  trigger:
+    - platform: state
+      entity_id: person.alex
+      from: "home"
+      to: "not_home"
+  action:
+    - service: alarm_control_panel.alarm_arm_away
+      target: {entity_id: alarm_control_panel.security}
+- id: seed_door_tell_phone           # FAULT 5 (first of two): a direct notify call, the owner's phone only
+  alias: "Front door opened - tell my phone"
+  trigger:
+    - platform: state
+      entity_id: lock.front_door
+      to: "unlocked"
+  action:
+    - service: notify.mobile_app_alex_phone
+      data: {message: "The front door was unlocked."}
+- id: seed_battery_tell_tablet       # FAULT 5 (second of two): a direct notify call, the owner's other device
+  alias: "Low battery - tell the tablet"
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.outside_temperature
+      below: -50
+  action:
+    - service: notify.mobile_app_alex_tablet
+      data: {message: "A battery is low."}
+- id: seed_blueprint_hall_motion     # the one blueprint-based automation (a blueprint that ships with Home Assistant)
+  alias: "Hall light on motion (blueprint)"
+  use_blueprint:
+    path: homeassistant/motion_light.yaml
+    input:
+      motion_entity: binary_sensor.movement_backyard
+      light_target:
+        entity_id: light.entrance_color_white_lights
+- id: seed_good_night_button         # pattern B
+  alias: "good_night_routine"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.guest_mode
+      to: "off"
+  action:
+    - service: script.turn_on
+      target: {entity_id: script.good_night}

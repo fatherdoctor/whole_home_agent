@@ -1,0 +1,77 @@
+name: Bug report
+description: The kit, or the assistant following it, did something wrong or confusing.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please remove names, addresses, phone numbers, passwords, codes, tokens, and your Home Assistant address from everything you paste.
+
+  - type: input
+    id: page_and_step
+    attributes:
+      label: Which kit page and step?
+      description: The file name and the step or heading where it went wrong, if you know them.
+      placeholder: "Example: 00-start-here/what-you-need.md, the step about installing Home Assistant"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: assistant
+    attributes:
+      label: Which assistant were you using?
+      options:
+        - ChatGPT
+        - Claude
+        - Other
+        - None, I was reading the kit myself
+    validations:
+      required: true
+
+  - type: input
+    id: assistant_detail
+    attributes:
+      label: Assistant name and model, if you know them
+      placeholder: "Example: Claude, Sonnet"
+
+  - type: input
+    id: home_assistant_version
+    attributes:
+      label: Home Assistant version
+      description: "In Home Assistant: Settings, About."
+      placeholder: "Example: 2026.11.1"
+
+  - type: textarea
+    id: assistant_said
+    attributes:
+      label: What the assistant said
+      description: Paste the reply, or the part of it that was wrong, with personal details removed. This box takes text only; a screenshot of the chat can go under Anything else.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra_context
+    attributes:
+      label: Anything else
+      description: Anything that helps explain what happened, such as the phase you were in.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed names, addresses, phone numbers, passwords, codes, tokens, and my Home Assistant address.
+          required: true
+        - label: I looked through the existing issues for a similar report.
+          required: true

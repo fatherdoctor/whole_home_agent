@@ -1,0 +1,132 @@
+# assistant_usage.yaml - the assistant's usage figures as sensors, the household's thresholds, the card's view picker.
+# Status: template (KIT-USE, 2026-10-24). Copied to ha/packages/assistant_usage.yaml at level 0-1, with
+# ha/custom_templates/usage.jinja (copy templates/custom_templates/usage.jinja) and the card
+# (templates/dashboards/assistant-usage-card.yaml). The figures come from the runtime's usage reader
+# (templates/runtime/usage_reader.py, copied to house/usage/), which runs where the assistant's login lives and writes
+# one JSON file into Home Assistant's config folder (templates/runtime/README.md, "The usage reader"). Every rule
+# lives in usage.jinja: change a rule there, never in a card or here.
+#
+# WHAT THE INTERVIEW FILLS (search for FILL):
+#   1. The file path below, if the reader writes somewhere else. The reader's --tz must be Home Assistant's own
+#      time zone (Settings > System > General), or "today" is unknown between the two midnights.
+#   2. The thresholds' starting values: set once in the UI after the first restart (no `initial:`, so the
+#      household's own values survive restarts). Usual start: weekly warning 80 %, daily budget 14.3 % (a week's
+#      100 % spread over 7 days). On a plan shared with heavy unattended runs, set them from the pacing target.
+#
+# WHAT IT NEVER DOES: refresh, store or show the login's token (the reader holds it in memory only); invent a
+# figure (a read older than two hours, or one from a window that has since reset, is unknown); notify anyone
+# (binary_sensor.assistant_usage_over_threshold is for the household's own automation, and stays off until
+# input_boolean.assistant_usage_alerts is turned on - the quietest mode by default).
+#
+# BEFORE IT IS TRUSTED: set the two thresholds (FILL 2; until then they sit at the helpers' minimums, 10 % and 1 %,
+# and the card says "Thresholds not set"); run the reader once by hand with --tz set, then check Settings > Tools > States: sensor.assistant_usage_read
+# shows the read time and the attributes; the week figure matches the assistant's own /usage screen; rename the
+# file for a minute and confirm the card says "Not read yet" or the figures go unknown after the stale window.
+
+command_line:
+  - sensor:
+      name: Assistant usage read
+      unique_id: assistant_usage_read
+      # FILL: the reader's --out path. `cat` of a missing file fails and the sensor goes unknown (never a guess).
+      command: "cat /config/assistant_usage/usage.json"
+      scan_interval: 300
+      value_template: "{{ value_json.read_at if value_json.read_at else 'unknown' }}"
+      json_attributes:
+        - schema
+        - provider
+        - plan
+        - tier
+        - read_at
+        - attempt_at
+        - status
+        - reason
+        - session
+        - week
+        - today
+        - models
+      icon: mdi:gauge
+
+input_number:
+  assistant_usage_weekly_warning:
+    name: Assistant weekly warning level
+    min: 10
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:gauge-full
+  assistant_usage_daily_budget:
+    name: Assistant daily budget
+    min: 1
+    max: 100
+    step: 0.1
+    unit_of_measurement: "%"
+    icon: mdi:calendar-today
+  # No `initial:`: set once in the UI (FILL 2 above).
+
+input_select:
+  assistant_usage_view:
+    name: Assistant usage view
+    options:
+      - Linear bars
+      - Numbers
+      - Tachometer
+    icon: mdi:view-dashboard-variant
+
+input_boolean:
+  assistant_usage_alerts:
+    name: Assistant usage threshold sensor on
+    icon: mdi:bell-off-outline
+    # Off by default: binary_sensor.assistant_usage_over_threshold stays off until the household turns this on.
+
+template:
+  - sensor:
+      - name: Assistant usage week
+        unique_id: assistant_usage_week
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:calendar-week
+        state: "{% from 'usage.jinja' import usage_pct %}{{ usage_pct('week') | float(none) }}"
+        attributes:
+          resets_at: "{{ (state_attr('sensor.assistant_usage_read', 'week') or {}).get('resets_at') }}"
+          severity: "{{ (state_attr('sensor.assistant_usage_read', 'week') or {}).get('severity') }}"
+      - name: Assistant usage today
+        unique_id: assistant_usage_today
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:calendar-today
+        state: "{% from 'usage.jinja' import usage_pct %}{{ usage_pct('today') | float(none) }}"
+        attributes:
+          since: "{{ (state_attr('sensor.assistant_usage_read', 'today') or {}).get('since') }}"
+      - name: Assistant usage session
+        unique_id: assistant_usage_session
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:timer-sand
+        state: "{% from 'usage.jinja' import usage_pct %}{{ usage_pct('session') | float(none) }}"
+        attributes:
+          resets_at: "{{ (state_attr('sensor.assistant_usage_read', 'session') or {}).get('resets_at') }}"
+          severity: "{{ (state_attr('sensor.assistant_usage_read', 'session') or {}).get('severity') }}"
+      - name: Assistant usage pace line
+        unique_id: assistant_usage_pace_line
+        unit_of_measurement: "%"
+        icon: mdi:chart-timeline-variant
+        state: "{% from 'usage.jinja' import usage_pace %}{{ usage_pace() | float(none) }}"
+      - name: Assistant usage read age
+        unique_id: assistant_usage_read_age
+        unit_of_measurement: min
+        icon: mdi:clock-outline
+        state: "{% from 'usage.jinja' import usage_age_min %}{{ usage_age_min() | int(none) }}"
+  - binary_sensor:
+      - name: Assistant usage stale
+        unique_id: assistant_usage_stale
+        icon: mdi:clock-alert-outline
+        # On when the week figure is unknown: no read yet, the read is too old, or the week has reset since.
+        state: "{% from 'usage.jinja' import usage_pct %}{{ usage_pct('week') == 'unknown' }}"
+      - name: Assistant usage over threshold
+        unique_id: assistant_usage_over_threshold
+        icon: mdi:gauge-full
+        state: >-
+          {% from 'usage.jinja' import usage_over %}
+          {{ is_state('input_boolean.assistant_usage_alerts', 'on')
+             and usage_over('input_number.assistant_usage_weekly_warning',
+                            'input_number.assistant_usage_daily_budget') == 'on' }}

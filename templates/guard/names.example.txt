@@ -1,0 +1,9 @@
+# names.txt - the household's own names, one per line. Copy to guard/names.txt and fill it in privately.
+# The push guard refuses a push whose new lines contain any of these as a whole word, case-insensitive.
+# List people (first names, nicknames, surnames), the street, the town and the pets' names if you like.
+# When first names are listed here, use roles in the profile and every other committed file.
+# Ask before the first push; until this list is filled, say the household names check is off.
+# Lines that start with # and blank lines are ignored. This file is never scanned by the guard.
+Sample Person
+Sampleton Lane
+Exampleville
