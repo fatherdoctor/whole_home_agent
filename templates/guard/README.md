@@ -42,9 +42,9 @@ If an existing hook prevented installation, stop and review how to retain its ch
 `exec` hands the guard's exit status to git, which aborts the push on anything but 0. `--pushed-refs` makes the guard
 read what the push sends: git gives the hook one line per ref on standard input, and the guard scans each one: a
 branch that is not checked out, a tag, and every ref of `git push --all` or `--tags`. It also reads the message of
-each new commit and of each annotated tag the push sends, even a tag on a commit the remote already has. The whole message is read: a
-signature marker inside it does not end the scan, and only a signed tag's signature block at the very end is left
-out. A chain of more than 20 tags (a tag of a tag, and so on) is refused, because the guard reads no further. A ref being
+each new commit and of each annotated tag the push sends, even a tag on a commit the remote already has. The whole
+message is read, a signed tag's signature block included, and so is the message of a signed tag that a merge copies
+into its commit. The name of each branch and tag the push sends is scanned too. A chain of more than 20 tags (a tag of a tag, and so on) is refused, because the guard reads no further. A ref being
 deleted sends nothing. A hook without `--pushed-refs` (installed before this change) scans only the checked-out branch; replace
 it, and the hook check below refuses it until you do. `--remote "$1"` names the
 remote being pushed to, so a commit that only another remote holds is still scanned on its way to this one; a remote with
@@ -98,25 +98,25 @@ computer, terminal or editor.
 The guard looks for known shapes. It is a net for mistakes, not proof that a push is safe. It does not catch:
 - a secret under a key that does not name one (`note: <value>`), unless the value has a known token shape (a JWT,
   `ghp_`, `sk-`, an AWS key id, 40 or more hex characters);
-- a password or code written in plain words, or split across lines or files;
+- a password or code written in plain words, or split across lines or files, or a list of values under a secret key
+  (`wifi_passwords:` and `- <value>` on the lines below);
+- a copy of `secrets.yaml` or `.env` with another word in front of the name (`house_secrets.yaml`,
+  `Kopie von secrets.yaml`, `Copy of Copy of .env`); its lines are still scanned. The guard knows the copies that
+  tools and editors make (`Copy of`, `old_`, `backup-`, `#...#`) and the names in the next section;
 - a value encoded so that it no longer looks like itself (base64, hex of text, a compressed or encrypted file);
 - a name that is not on the names list, a nickname, or a name in another spelling;
-- the author and committer names and e-mail addresses on each commit (set them before the first commit);
+- the author, committer and tagger names and e-mail addresses on each commit and tag (set them before the first
+  commit); a branch or tag name is scanned, with the shapes and the names list, but a ref being deleted is not;
 - a file the guard cannot read as text and that is listed in `binary.txt`;
+- a value on the line after its key in a form that formatters do not write: a JSON key that is not first on its
+  line (`{"wifi_password":` and the value below), a JSON colon on the next line, a YAML complex key
+  (`? wifi_password` and `: <value>` below); and any value on the line after its key outside a `.yaml`, `.yml` or
+  `.json` file (a YAML example in a Markdown code block);
+- a commit header field other than `mergetag` (git writes no other field that holds text, but a hand-made commit
+  can carry one);
 - a push that does not run it: `git push --no-verify`, a computer that does not run the hook, or a tool that
   pushes without git.
 Keep secrets out of the repository in the first place: in `secrets.yaml` (never committed) and `!secret` references.
-
-### Known issues in v1.0
-Fixes are planned for the next version.
-
-- A format character the guard does not strip (a right-to-left mark, an isolate, a variation selector, a combining joiner) in front of a key such as `alarm_pin` or `porch_api_token` hides it from the line-start shapes; only a byte-order mark, zero-width characters and a soft hyphen are removed.
-- A secret written on the line after its key with no `|` or `>` (`wifi_password:` and the value on the next line, in YAML or JSON) is not read together with its key.
-- In an annotated tag's message, a signature-shaped block at the very end is left out of the scan, so a value made only of letters, digits, `+`, `/` and `=` (an AWS key id, a hex token, a one-word listed name) can sit there unread.
-- The forbidden paths are exact names: a copy of `secrets.yaml` or `.env` under another name (`secrets.yaml.bak`, `.env.local`) is judged by its lines only.
-- A branch or tag name is not scanned.
-- Adding or updating a submodule is refused as "long hex"; mark the `Subproject commit` line with `guard: allow submodule` until the next version.
-- A signed tag merged into a branch puts its message in the merge commit's header, which the guard does not read.
 
 ## What it lets through on purpose
 - A full commit id inside a GitHub `/commit/`, `/blob/` or `/tree/` link, a GitHub Actions step pinned as
@@ -124,6 +124,19 @@ Fixes are planned for the next version.
   `sha`: `"repo_commit": "..."`), and a 64-character digest under `sha256`, `checksum`, `digest` or `hash`: only
   that value is masked; the rest of the line is still scanned. A commit id or checksum anywhere else (in a
   sentence, under another key) is refused; mark it `guard: allow commit id`.
+- The commit a submodule points at: a submodule entry is not a file, so its `Subproject commit <id>` line is not
+  read. The same line written in a text file is read like any other.
+- A template of a secret file with placeholders, whose name ends in `example`, `sample`, `template`, `dist` or
+  `defaults`: `.env.example`, `.env.dist`, `secrets.yaml.sample`, `secrets.example.yaml`. Its lines are scanned
+  like any other file's. A template word can follow `.`, `_` or `-`, also after more words of letters and digits:
+  `.env-example`, `.env_sample` and `.env.local.example` are templates too. A space or a `~` in the name, or a
+  word after the template word (`.env.example.local`), makes it a copy. Every other file whose name starts with `secrets` and has `.yaml` or `.yml` in it is a forbidden
+  path (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets (1).yaml`, `secrets-backup.yaml`, `secrets.yml`,
+  `.secrets.yaml.swp`), and so is a copy named in front (`Copy of secrets.yaml`, `old_secrets.yaml`,
+  `#secrets.yaml#`, `Copy of .env`, `#.env#`) and `.env` followed by `.`, `_`, `-`, `~` or a space (`.env.local`,
+  `.env_local`, `.env copy`).
+  A file of your own with such a name, such as a workflow `secrets-scan.yml`, is refused too: rename it, for example
+  to `secret-scan.yml`. The guard has no way to allow a forbidden path.
 - A password named by its key or by `!secret`, any other YAML tag (`!lambda`, `!include`), a template
   (`{{ ... }}`), an environment variable (`$VAR`, `${VAR}`), a `<placeholder>` (also as a URL's password); a number
   that is part of a date, a version or a decimal.

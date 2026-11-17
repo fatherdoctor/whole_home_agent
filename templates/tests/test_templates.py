@@ -13,6 +13,7 @@ house repositories at levels 0-2), and that every YAML template loads. After the
 """
 import importlib.util
 import json
+import re
 import os
 import pathlib
 import subprocess
@@ -677,6 +678,110 @@ case("guard: package path passes", guard.scan([("ha/packages/porch.yaml", None, 
 for bad in ("home-assistant_v2.db", "home-assistant_v2.db-wal", ".git-credentials", "x/.credentials.json",
             ".claudecode/git-credentials"):
     case(f"guard: {bad} path refused", [k for _, _, k in guard.scan([(bad, None, None)])], ["forbidden path"])
+# v1.1: every format character and combining mark is taken out before the line-start shapes; a value on the line
+# after its key is read with the key; near copies of secret files are forbidden; a submodule line is not long hex;
+# a merged tag's message and the pushed ref names are read.
+# KIT-GUARD-NEXTr F3 (R02, R03, R06): a braille blank and the controls delete and escape are taken out too.
+for _mark in ("\u202e", "\u2066", "\u200f", "\ufe0f", "\u034f", "\u20dd", "\U000e0001", "\u2800", "\x7f", "\x1b"):
+    case(f"guard: a PIN after U+{ord(_mark):04X} refused",
+         [k for _, _, k in guard.scan([("n.yaml", 1, _mark + _PIN)])], ["literal secret"])
+case("guard: visible keeps the tab and the controls that break a line",
+     guard.visible("a\tb\rc\x0bd\x85e\x7f\x1bf\u2800"), "a\tb\rc\x0bd\x85ef")
+case("guard: an accented listed name still matches", [k for _, _, k in guard.scan(
+     [("d.md", 1, "Ask Zo\u00eb to check")], names=[re.compile(r"(?<!\w)Zo\u00eb(?!\w)", re.I)])], ["household name"])
+for _text, _want in ((f"wifi_password:\n  {_V}\n", [f"wifi_password: {_V}"]),
+                     (f"wifi_password:\n  '{_V}'\n", [f"wifi_password: '{_V}'"]),
+                     ('alarm_pin:\n\n  "4821"\n', ['alarm_pin: "4821"']),
+                     (f'{{\n  "wifi_password":\n  "{_V}"\n}}\n', [f'  "wifi_password": "{_V}"']),
+                     ("wifi_password: !secret\n  wifi\n", ["wifi_password: !secret wifi"]),
+                     (f"wifi_password:\n{_V}\n", []),  # not indented: the key's value is empty, the next line is its own
+                     ("interrupt_pin:\n  number: GPIO4\n", []),
+                     ("api_token:\n  - a\n", []),
+                     ("code:\n  # a comment\n", []),
+                     ("wifi_password: hunter\n  more\n", []),
+                     # KIT-GUARD-NEXTr F1 (R10, R25): a comment line between the key and its value is skipped, as
+                     # YAML skips it; under a block indicator a `#` line is part of the value.
+                     (f"wifi_password:\n  # the guest network\n  {_V}\n", [f"wifi_password: {_V}"]),
+                     ('alarm_pin:\n  # keypad\n\n  "4821"\n', ['alarm_pin: "4821"']),
+                     ("interrupt_pin:\n  # the button\n  number: GPIO4\n", []),
+                     ("wifi_password: |\n  # not a comment\n", ["wifi_password: # not a comment"]),
+                     # F2 (R14): a quoted value with a colon and a space is a value, not a key.
+                     (f'wifi_password:\n  "{_V}: {_V}"\n', [f'wifi_password: "{_V}: {_V}"']),
+                     (f'{{\n  "wifi_password":\n  "{_V}: x"\n}}\n', [f'  "wifi_password": "{_V}: x"']),
+                     ('api_token:\n  "label": x\n', []),
+                     # Decided: listed in the guard README's Limits, not read (R15, R16, R23).
+                     (f'{{"wifi_password":\n  "{_V}"}}\n', []),
+                     (f'{{\n  "wifi_password"\n  : "{_V}"\n}}\n', []),
+                     (f"? wifi_password\n: {_V}\n", []),
+                     # KIT-GUARD-NEXT.g C4 (closer K22, K26): an escaped quote does not close a double-quoted key,
+                     # so a value with a quote, a colon and a space is still a value.
+                     (f'wifi_password:\n  "{_V}\\": {_V}xx"\n', [f'wifi_password: "{_V}\\": {_V}xx"']),
+                     (f'{{\n  "wifi_password":\n  "{_V}\\": {_V}xx"\n}}\n', [f'  "wifi_password": "{_V}\\": {_V}xx"']),
+                     ('api_token:\n  "a\\" b": x\n', [])):
+    case(f"guard: next-line value in {_text[:24]!r}", [j for _, j, _ in guard.block_values(_text)], _want)
+# KIT-GUARD-NEXTr F4 (R40-R48): a copy named before the extension, a .yml, a `_` suffix and an editor's swap file
+# are forbidden paths; F5 (A09): .env.dist and .env.defaults are templates.
+for _path, _want in (("secrets.yaml.bak", ["forbidden path"]), ("ha/secrets.yaml~", ["forbidden path"]),
+                     (".env.local", ["forbidden path"]), ("app/.env.production", ["forbidden path"]),
+                     (".env.example", []), ("secrets.yaml.example", []), ("id_rsa.pub", []), ("docs/env.md", []),
+                     ("ha/secrets copy.yaml", ["forbidden path"]), ("ha/secrets (1).yaml", ["forbidden path"]),
+                     ("ha/secrets - Copy.yaml", ["forbidden path"]), ("ha/secrets-backup.yaml", ["forbidden path"]),
+                     ("ha/secrets.yml", ["forbidden path"]), ("ha/secrets.yaml_bak", ["forbidden path"]),
+                     ("ha/.secrets.yaml.swp", ["forbidden path"]), (".env_local", ["forbidden path"]),
+                     ("secrets.yaml.example.bak", ["forbidden path"]), (".env.example.bak", ["forbidden path"]),
+                     (".env.dist", []), (".env.defaults", []), ("secrets.example.yaml", []), (".envrc", []),
+                     ("docs/secrets.md", []), ("tools/secrets_scan.py", []), ("blueprint_secrets.yaml", []),
+                     # KIT-GUARD-NEXT.g C1 (closer A25, A26): a template word after `.env` and a dot, `_` or `-`.
+                     (".env-example", []), (".env_sample", []), (".env-template", []), (".env_dist", []),
+                     (".env-example.bak", ["forbidden path"]), (".env-prod", ["forbidden path"]),
+                     # C2 (A21), decided: a file named `secrets` with `.yml` in it is refused; the README says rename it.
+                     (".github/wf/secrets-scan.yml", ["forbidden path"]), ("ha/secrets_rotation.yaml", ["forbidden path"]),
+                     (".github/wf/secret-scan.yml", []), (".github/wf/scan-secrets.yml", []),
+                     # C3 (K43, K44, K46, K50): a copy named in front of `secrets.yaml`, and `.env` with a space.
+                     ("ha/Copy of secrets.yaml", ["forbidden path"]), ("ha/Copy (2) of secrets.yaml", ["forbidden path"]),
+                     ("ha/old_secrets.yaml", ["forbidden path"]), ("ha/backup-secrets.yml", ["forbidden path"]),
+                     ("ha/#secrets.yaml#", ["forbidden path"]), (".env copy", ["forbidden path"]),
+                     (".env (1)", ["forbidden path"]), ("ha/old_secrets.yaml.example", []),
+                     ("ha/old_secrets.md", []), ("ha/secret_santa.yaml", []), ("ha/golden_secrets.yaml", []),
+                     # KIT-GUARD-NEXT.h D1 (closer G04): a template word at the end of a longer `.env` name.
+                     (".env.local.example", []), (".env.production.sample", []), (".env.development.example", []),
+                     ("app/.env.local-template", []), (".env.example.local", ["forbidden path"]),
+                     (".env-example~", ["forbidden path"]), (".env.local.example~", ["forbidden path"]),
+                     (".env.local example", ["forbidden path"]), (".env.my secrets.example", ["forbidden path"]),
+                     (".env..example", ["forbidden path"]), (".env.example_real", ["forbidden path"]),
+                     # D2 (closer G27, G30): the same copy names in front of `.env` as in front of `secrets.yaml`.
+                     ("#.env#", ["forbidden path"]), ("Copy of .env", ["forbidden path"]),
+                     ("app/Copy (2) of .env.local", ["forbidden path"]), ("old_.env", ["forbidden path"]),
+                     ("backup-.env", ["forbidden path"]), ("Copy of .env.local.example", []),
+                     ("Copy of .envrc", []), ("docs/copy of env.md", [])):
+    case(f"guard: path {_path}", [k for _, _, k in guard.scan([(_path, None, None)])], _want)
+# F6 (R54): the submodule entry is skipped by its file mode in the diff (the pushes in selftest.py), so a
+# `Subproject commit` line in a text file is read like any other line.
+case("guard: a Subproject commit line in a text file is long hex",
+     [k for _, _, k in guard.scan([("docs/notes.md", 1, "Subproject commit " + "0a1b2c3d4e" * 4)])], ["long hex"])
+for _header in ("new file mode 160000", "new mode 160000", "index 0a1b2c3..3c2b1a0 160000"):
+    case(f"guard: {_header!r} marks a submodule entry", bool(guard._SUBMODULE_MODE.match(_header)), True)
+for _header in ("new file mode 100644", "index 0a1b2c3..3c2b1a0 100644", "old mode 160000"):
+    case(f"guard: {_header!r} is not a submodule entry", bool(guard._SUBMODULE_MODE.match(_header)), False)
+case("guard: long hex after other words is still refused",
+     [k for _, _, k in guard.scan([("d.md", 1, "token Subproject commit " + "0a1b2c3d4e" * 4)])], ["long hex"])
+_MT = ("tree t\nparent a\nparent b\nauthor x\ncommitter x\nmergetag object b\n type commit\n tag v1\n"
+       " tagger x\n \n release\n note two\n -----BEGIN PGP SIGNATURE-----\n \n iQEz=\n -----END PGP SIGNATURE-----")
+case("guard: a merged tag's message is read, its header is not", guard.mergetag_lines(_MT),
+     [(1, "release"), (2, "note two"), (3, "-----BEGIN PGP SIGNATURE-----"), (4, ""), (5, "iQEz="),
+      (6, "-----END PGP SIGNATURE-----")])
+case("guard: another header field is not read (Limits, R33)", guard.mergetag_lines("tree t\nnote wifi_password: x"), [])
+case("guard: a Markdown file gets no next-line read (Limits, R19)", bool(guard.KEYED_EXT.search("docs/wifi.md")), False)
+# Decided (A05, C03): a string under a key that ends in `code` is refused on the next line as on one line; the allow
+# mark is the way out where the format has comments.
+_TR = '{\n  "invalid_' + 'code":\n    "Invalid entry, try again"\n}\n'
+case("guard: a translation string under a code key is refused, as on one line",
+     [k for _, j, _ in guard.block_values(_TR) for _, _, k in guard.scan([("en.json", 3, j)])], ["literal secret"])
+case("guard: no mergetag, nothing read", guard.mergetag_lines("tree t\nparent a\nauthor x\ncommitter x"), [])
+_Z, _S = "0" * 40, "1" * 40
+case("guard: pushed ref names", guard.ref_name_lines([f"refs/heads/main {_S} refs/heads/x-1 {_Z}",
+                                                      f"(delete) {_Z} refs/heads/bad-name {_S}"]),
+     [("pushed ref name", 1, "refs/heads/main"), ("pushed ref name", 2, "refs/heads/x-1")])
 guard_st = load(TEMPLATES / "guard" / "selftest.py", "guard_selftest")
 case("guard: photo with GPS refused", [k for _, _, k in guard.scan([("p/a.jpg", None, None)], read=lambda p: guard_st.jpeg(True))],
      ["photo location (GPS in EXIF)"])

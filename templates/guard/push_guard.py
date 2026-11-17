@@ -3,8 +3,10 @@
 
 Status: template (O4, 2026-10-14; names list KIT-GRD, 2026-10-23; more shapes, photo location and the shrink check
 KIT-SAFE, 2026-11-01; token values, fewer false refusals and long lines KIT-SAFE.f, 2026-11-02; YAML blocks, binary
-and UTF-16 files, escapes, photos by their bytes and names in paths KIT-XR-GUARD.f, 2026-11-11). Goes to guard/push_guard.py; installed as a
-pre-push hook (see templates/guard/README.md). Standard library only.
+and UTF-16 files, escapes, photos by their bytes and names in paths KIT-XR-GUARD.f, 2026-11-11; v1.1: every format
+character and combining mark, a value on the next line, signature blocks, merged tags, ref names, near copies of
+secret files and submodule lines, 2026-11-17). Goes to guard/push_guard.py; installed as a pre-push hook (see
+templates/guard/README.md). Standard library only.
 
 What it reads. As the pre-push hook (`--pushed-refs`, the hook in templates/guard/README.md), the lines git gives
 the hook on standard input: one per ref the push sends (a branch that is not checked out, a tag, every ref of
@@ -15,12 +17,16 @@ that cannot run the hook) builds the same lines itself from the named refs, chec
 the checked commits by their ids only when the check is clean (hook_lines), with push.followTags and
 push.recurseSubmodules turned off so nothing unread is added. Without either (a check, not a push) it
 reads the checked-out branch only, as below. The message of each commit in a range, and of each annotated tag a
-push sends, is scanned like a file's lines (message_lines), up to a signed tag's closing signature block; the author
-and committer names are not. A chain of more than MAX_TAG_DEPTH tags is refused (tag_objects). A bare carriage return or another line separator inside a line does not hide the
+push sends, is scanned like a file's lines (message_lines), a signed tag's closing signature block and the message
+of a tag a merge copies into its commit (`mergetag`) too; the author, committer and tagger names are not. Each
+branch and tag name a push sends is scanned too (ref_name_lines). A chain of more than MAX_TAG_DEPTH tags is refused (tag_objects). A bare carriage return or another line separator inside a line does not hide the
 rest of it: each piece is judged as its own line too, and a YAML block value after one is still read with its key.
-The diff is read with fixed a/ and b/ prefixes, so a diff preference (diff.noprefix) cannot hide the paths.
-A character that prints as nothing (a byte-order mark, a zero-width space) does not hide a key: each line is also
-judged without them. A YAML block value is judged with its key when either line is new, so a changed key over an old
+The diff is read with fixed a/ and b/ prefixes, so a diff preference (diff.noprefix) cannot hide the paths. A
+submodule entry (mode 160000) is a commit id, not text: its diff line is not read.
+A character that prints as nothing or only marks the one before it (a byte-order mark, a zero-width space, a
+direction override, a variation selector, a control character, a braille blank: Unicode's format characters,
+combining marks and controls) does not hide a key:
+each line is also judged without them. A YAML block value is judged with its key when either line is new, so a changed key over an old
 value is read, and a tag or an anchor between the key and the block indicator (`! |`, `&a !!str >-`) does not hide
 it.
 
@@ -32,7 +38,9 @@ on that remote, else the commits that remote does not have, so a commit only ano
 removed in the next is still in the pushed history. A merge commit adds only the lines new against every parent, so
 a pull that merges does not charge the pusher with lines already upstream. A photo is read as the commit that
 touched it left it. It scans for:
-  - forbidden paths: secrets.yaml, .storage/, *.key, *.pem, id_rsa/id_ed25519 (the private half), backup archives,
+  - forbidden paths: secrets.yaml and .env, also under a near name (secrets.yaml.bak, secrets copy.yaml,
+    secrets.yml, Copy of secrets.yaml, .env.local, .env copy; not a template whose name ends in example, sample,
+    template, dist or defaults), .storage/, *.key, *.pem, id_rsa/id_ed25519 (the private half), backup archives,
     the backup emergency kit, the recorder database (home-assistant_v2.db), git and agent credential files
     (.git-credentials, .credentials.json, .claudecode/);
   - credential shapes: a JWT (Home Assistant long-lived tokens are JWTs), "Bearer <long value>", a private key
@@ -60,7 +68,9 @@ touched it left it. It scans for:
     lives next to this script, or `--names PATH`; with no file the check is off and the guard says so. The names
     file itself (the one `--names` points at) is never scanned; keep it out of git (README, "Household names").
     A listed word in a file's path is refused too.
-A YAML block scalar under a secret key (`wifi_password: |-` and the value on the next line) is judged as one line,
+A secret key whose value is on the next line (a YAML block scalar, `wifi_password: |-`; a plain or quoted YAML
+value indented under its key, also after comment lines; a JSON key at the end of its line) is judged with that value
+as one line,
 and a line with \\u, \\U or \\x escapes is scanned as written and again with the escapes turned into characters
 (json.dumps writes an accented name that way).
 A file on the shrink list (guard/shrink.txt next to this script, or `--shrink PATH`; one repository path per line,
@@ -80,11 +90,35 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
+# The last word of a template's name: `.env.example`, `.env.dist`, `secrets.yaml.sample`.
+TEMPLATE_SUFFIX = r"(?:example|sample|template|dist|defaults)"
+# What follows `.env` in a template's name: words of letters and digits, each after `.`, `_` or `-`, and a template
+# word last (`.env.example`, `.env_sample`, `.env.local.example`). A space, a `~` or a word after the template word
+# (`.env.example.bak`) makes it a copy, not a template.
+ENV_TEMPLATE_TAIL = r"(?:[._-][a-z0-9]+)*[._-]" + TEMPLATE_SUFFIX + r"$"
 FORBIDDEN_PATHS = [
     re.compile(p, re.I) for p in (
-        r"(^|/)secrets\.yaml$", r"(^|/)\.storage/", r"\.(key|pem|p12|pfx)$", r"(^|/)id_(rsa|ed25519|ecdsa)$",
-        r"\.tar(\.gz)?$", r"emergency[_ -]?kit", r"(^|/)\.env$",
+        # A copy under a near name is forbidden too: anything between `secrets` and `.yaml` or `.yml` in one file
+        # name (`secrets copy.yaml`, `secrets (1).yaml`, `secrets-backup.yaml`, `secrets.yml`), anything after it
+        # (`secrets.yaml.bak`, `secrets.yaml~`, `secrets.yaml_bak`), a leading dot (an editor's `.secrets.yaml.swp`),
+        # and `.env` followed by `.`, `_`, `-` or `~` (`.env.local`, `.env_local`). Not a template that holds
+        # placeholders (TEMPLATE_SUFFIX: `.env.example`, `secrets.yaml.sample`, `secrets.example.yaml`): its lines
+        # are still scanned like any file's.
+        r"(^|/)\.?secrets(?!\.ya?ml\." + TEMPLATE_SUFFIX + r"$|[._-]" + TEMPLATE_SUFFIX + r"\.ya?ml$)"
+        r"[^/]*\.ya?ml[^/]*(/|$)",
+        # A copy named in front: `Copy of secrets.yaml` (Windows, Google Drive), `old_secrets.yaml`, an editor's
+        # `#secrets.yaml#`. Another word in front (`blueprint_secrets.yaml`) is a file of its own (README, Limits).
+        r"(^|/)(?:#|copy (?:\(\d+\) )?of |(?:old|orig|backup|bak)[._ -])secrets\.ya?ml(?!\." + TEMPLATE_SUFFIX
+        + r"$)[^/]*$",
+        # `.env` and anything after it but a template's tail (`.env.local`, `.env copy`, `.env.example.bak`).
+        r"(^|/)\.env(?!" + ENV_TEMPLATE_TAIL + r")([._~ -]|$)",
+        # The same copy names in front of `.env`: `Copy of .env`, `old_.env`, an editor's `#.env#`.
+        r"(^|/)(?:#|copy (?:\(\d+\) )?of |(?:old|orig|backup|bak)[._ -])\.env(?!" + ENV_TEMPLATE_TAIL
+        + r")([._~ #-]|$)",
+        r"(^|/)\.storage/", r"\.(key|pem|p12|pfx)$", r"(^|/)id_(rsa|ed25519|ecdsa)$",
+        r"\.tar(\.gz)?$", r"emergency[_ -]?kit",
         r"\.db(-wal|-shm|-journal)?$", r"(^|/)\.git-credentials", r"(^|/)\.credentials\.json$",
         r"(^|/)\.claudecode/",
     )
@@ -190,15 +224,29 @@ _IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"II*\x00", b"MM\x00*")
 _HEIF_BRANDS = (b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1", b"avif")
 # Binary kinds that hold no text to leak (fonts, GIF, icons): passed without a finding.
 _SAFE_MAGIC = (b"wOFF", b"wOF2", b"\x00\x01\x00\x00", b"OTTO", b"GIF87a", b"GIF89a", b"\x00\x00\x01\x00")
-# A YAML key that names a secret, set to a block scalar (`wifi_password: |-`); its value is on the next lines (F1).
-# YAML allows node properties between the colon and the block indicator: a tag (`!`, `!!str`, `!<tag:...>`, `!foo`)
-# and an anchor (`&a`), in either order (KIT-PUBr.f.pr2 F3). A named local tag (`!secret`, `!vault`) is kept with
-# the value, so the line shapes still treat it as a reference; a non-specific or standard tag and an anchor are not.
+# A key that names a secret with nothing after the colon but node properties, a block indicator or a comment: its
+# value is on the next lines. That is a block scalar (`wifi_password: |-`, F1), or a plain or quoted scalar on the
+# next line (`wifi_password:` and the value indented under it in YAML, `"wifi_password":` at the end of a JSON
+# line). YAML allows node properties between the colon and the value: a tag (`!`, `!!str`, `!<tag:...>`,
+# `!foo`) and an anchor (`&a`), in either order (KIT-PUBr.f.pr2 F3). A named local tag (`!secret`, `!vault`) is
+# kept with the value, so the line shapes still treat it as a reference; a non-specific or standard tag and an
+# anchor are not.
+_PROP = r"(?:!\S*|&\S+)"
 _BLOCK_KEY = re.compile(
-    r"^(?P<indent>\s*(?:-\s+)?)(?P<key>['\"]?(?:[\w-]*(?:password|passwd|secret|api_key|apikey)|[\w-]*(?:token|pin|code))"
-    r"['\"]?\s*:)\s*(?P<props>(?:(?:!\S*|&\S+)\s+){0,2})[|>][1-9+-]{0,2}\s*(?:#.*)?$", re.I)
+    r"^(?P<indent>\s*(?:-\s+)?)(?P<key>(?P<quote>['\"]?)(?:[\w-]*(?:password|passwd|secret|api_key|apikey)"
+    r"|[\w-]*(?:token|pin|code))['\"]?\s*:)\s*"
+    r"(?P<props>(?:" + _PROP + r"\s+){0,2}(?:" + _PROP + r"(?=\s*(?:#.*)?$))?)"
+    r"(?P<block>[|>][1-9+-]{0,2})?\s*(?:#.*)?$", re.I)
+# A next line that is not a scalar value: another key (`number: GPIO4` under ESPHome's `interrupt_pin:`) or a sequence
+# item. The key above then holds a mapping or a list, whose own lines are judged as usual. A quoted key closes its
+# quote before the colon: `"hunter22: hunter22"` is a quoted value, not a key, and so is `"x\": y"` (an escaped
+# quote does not close it).
+_NOT_A_SCALAR = re.compile(r"^\s*(?:(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|[^\s:'\"]+)\s*:(?:\s|$)|-(?:\s|$))")
+_COMMENT_LINE = re.compile(r"^\s*#")
 _NAMED_TAG = re.compile(r"(?<!\S)![A-Za-z][\w-]*(?!\S)")
-YAML_EXT = re.compile(r"\.ya?ml$", re.I)
+# Files whose secret keys can hold their value on the next lines (block_values): YAML, and JSON for a key at the end
+# of a line.
+KEYED_EXT = re.compile(r"\.(?:ya?ml|json)$", re.I)
 # The escapes JSON, YAML and most languages write for a character (F3): é, \U0001f600, \x41.
 _ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x([0-9a-fA-F]{2})")
 
@@ -243,15 +291,32 @@ def decode_text(data):
     return None
 
 
-# Characters that print as nothing: a byte-order mark (U+FEFF, also at the start of a UTF-8 file that git reads as
-# text), zero-width spaces and joiners, a soft hyphen. One before `alarm_pin` stops a line-start shape from matching,
-# so each line is also judged with them removed (KIT-PUBr.f.pr2 F2).
-_INVISIBLE = re.compile("[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]")
+# Characters that print as nothing or only change the character before them: format characters (Unicode category Cf:
+# a byte-order mark, zero-width spaces and joiners, a soft hyphen, direction marks, overrides and isolates), combining
+# marks (Mn and Me: a variation selector, the combining grapheme joiner, accents) and control characters (Cc: delete,
+# escape). One before `alarm_pin` stops a line-start shape from matching, so each line is also judged with them
+# removed. A fixed list missed the direction and variation characters. The categories do not cover every blank:
+# the braille blank (U+2800) is a symbol, so it is named here; the Hangul fillers are letters and still reach the
+# shapes that do not need a line start. The tab and the controls that break a line (LINE_SEPARATORS) stay: each
+# piece between them is judged as its own line.
+_INVISIBLE_CATEGORIES = ("Cf", "Mn", "Me", "Cc")
+_KEPT_CONTROLS = "\t\n\r\x0b\x0c\x1c\x1d\x1e\x85"
+_BLANK_SYMBOLS = "\u2800"
+_ASCII_HIDDEN = re.compile("[\x00-\x08\x0e-\x1b\x1f\x7f]")
+
+
+def _hidden(c):
+    """True for a character visible() removes."""
+    if c in _BLANK_SYMBOLS:
+        return True
+    return unicodedata.category(c) in _INVISIBLE_CATEGORIES and c not in _KEPT_CONTROLS
 
 
 def visible(text):
-    """The text without the characters that print as nothing (_INVISIBLE)."""
-    return _INVISIBLE.sub("", text)
+    """The text without the characters that print as nothing (_hidden)."""
+    if text.isascii() and not _ASCII_HIDDEN.search(text):
+        return text
+    return "".join(c for c in text if not _hidden(c))
 
 
 # What YAML reads as a line break. A bare carriage return is one, so a block key and its value can share one line
@@ -260,12 +325,16 @@ _YAML_BREAK = re.compile("\r\n|[\r\x85\u2028\u2029]")
 
 
 def block_values(text):
-    """(lineno, joined, key_lineno) for each YAML block scalar under a secret key: the key and the first line of its
-    value as one line (`wifi_password: <value>`), numbered as the line of the file that holds the value, so the line
-    shapes judge it with their usual exceptions (a `!secret` reference, a placeholder, a variable). key_lineno is the
-    line that holds the key: a change to the key alone makes an old value a secret (KIT-PUBr.f.pr2 F1), so a caller
-    judges the pair when either line is new. Lines start at 1. The key and the value are found on YAML's own lines,
-    which a bare carriage return also ends, after the characters that print as nothing are removed."""
+    """(lineno, joined, key_lineno) for each value on the line after its secret key (_BLOCK_KEY): the key and the first
+    line of its value as one line (`wifi_password: <value>`), numbered as the line of the file that holds the value,
+    so the line shapes judge it with their usual exceptions (a `!secret` reference, a placeholder, a variable).
+    key_lineno is the line that holds the key: a change to the key alone makes an old value a secret (KIT-PUBr.f.pr2
+    F1), so a caller judges the pair when either line is new. Lines start at 1. The key and the value are found on
+    YAML's own lines, which a bare carriage return also ends, after the characters that print as nothing are removed.
+    The value is the next line that is not blank. Under a block indicator, or a plain YAML key, it is indented deeper
+    than the key; under a quoted key (JSON) any indent counts. Without a block indicator, a comment line is skipped,
+    as YAML skips it (a note above a password), and a next line that is a key or a list item is not a value
+    (_NOT_A_SCALAR). Under a block indicator a `#` line is part of the value."""
     lines = [(n, visible(piece)) for n, line in enumerate(text_lines(text), 1) for piece in _YAML_BREAK.split(line)]
     out = []
     for i, (key_n, line) in enumerate(lines):
@@ -274,10 +343,20 @@ def block_values(text):
             continue
         indent = len(m.group("indent"))
         tags = "".join(t + " " for t in _NAMED_TAG.findall(m.group("props")))
+        block = m.group("block")
         for n, value in lines[i + 1:]:
             if not value.strip():
                 continue
-            if len(value) - len(value.lstrip()) > indent:
+            if not block and _COMMENT_LINE.match(value):
+                continue
+            deeper = len(value) - len(value.lstrip()) > indent
+            if block:
+                is_value = deeper
+            elif m.group("quote"):
+                is_value = not _NOT_A_SCALAR.match(value)
+            else:
+                is_value = deeper and not _NOT_A_SCALAR.match(value)
+            if is_value:
                 out.append((n, m.group("indent") + m.group("key") + " " + tags + value.strip(), key_n))
             break
     return out
@@ -493,6 +572,19 @@ def pushed_ranges(repo, remote, lines):
     return out, refused, tags
 
 
+def ref_name_lines(lines):
+    """("pushed ref name", lineno, name) for each branch or tag name a push sends, local and remote side, from the
+    pre-push lines (`<local ref> <local sha> <remote ref> <remote sha>`). A ref name reaches the remote like a file's
+    line does (`main:refs/heads/<a token>`), so it is scanned with the same shapes and the names list. A delete
+    (local sha all zeros) is not scanned, so a badly named branch can always be removed."""
+    names = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) == 4 and not ZERO.fullmatch(fields[1]):
+            names += [name for name in (fields[0], fields[2]) if name not in names]
+    return [("pushed ref name", n, name) for n, name in enumerate(names, 1)]
+
+
 def hook_lines(repo, remote, refs):
     """The by-hand route (KIT-PUBr.f.pr3 F1): the lines a pre-push hook would get for `git push <remote> <refs>`, and
     the refspecs that push exactly those objects. A ref is a branch or tag name, `HEAD`, or `<src>:<dst>`; a leading
@@ -588,7 +680,7 @@ def changes(repo, rng):
             if text is None:
                 continue
             numbered = list(enumerate(text_lines(text), 1))
-            if YAML_EXT.search(path):
+            if KEYED_EXT.search(path):
                 numbered += [(n, joined) for n, joined, _ in block_values(text)]
             for n, line in numbered:
                 if (path, line) not in seen:
@@ -610,26 +702,41 @@ def changes(repo, rng):
                 yield item if item[2] is not None else (item[0], commit, None)
 
 
-# A signed tag's signature: one armored block at the very end of the message, holding base64 lines only
-# (KIT-PUBr.f.pr4 F2). Text a person can type into a message never matches it, so it cannot end the scan early.
-TAG_SIGNATURE = re.compile(r"(?:\A|\n)-----BEGIN (PGP SIGNATURE|SSH SIGNATURE|SIGNED MESSAGE)-----\n"
-                           r"[A-Za-z0-9+/=\n]*-----END \1-----\n?\Z")
-
-
 def message_lines(repo, sha, kind):
     """(label, lineno, line) for each line of a commit's or an annotated tag's message. The message travels with the
     push like a file does, so it is scanned with the same shapes (KIT-PUBr.f.pr3 F2). The label stands in for a path:
-    `commit 1a2b3c4d5e6f message`. The header (tree, parents, author and committer names) is not scanned: the
-    owner's own name is on the names list and on every commit. A commit's signature is in its header, so the whole
-    commit message is scanned. A signed tag's signature ends its message; only a well-formed block at the end is left
-    out (TAG_SIGNATURE). A signature marker anywhere else is text like any other line (KIT-PUBr.f.pr4 F2)."""
+    `commit 1a2b3c4d5e6f message`. The whole message is scanned, a signed tag's closing signature block too: a
+    signature is base64, which matches no shape in practice, and a block that only looks like one could hide a
+    value. The header (tree, parents, author, committer and tagger names) is not scanned: the owner's own name
+    is on the names list and on every commit. One part of a commit's header is a message: a merge of a signed tag
+    copies that tag into a `mergetag` header, and the copied tag's message is scanned as `commit ... mergetag`."""
     raw = git(repo, "cat-file", kind, sha)
-    _, _, body = raw.partition("\n\n")
-    if kind == "tag":
-        body = TAG_SIGNATURE.sub("\n", body)
+    header, _, body = raw.partition("\n\n")
     label = f"{kind} {sha[:12]} message"
     for n, line in enumerate(text_lines(body), 1):
         yield label, n, line
+    if kind == "commit":
+        for n, line in mergetag_lines(header):
+            yield f"commit {sha[:12]} mergetag", n, line
+
+
+def mergetag_lines(header):
+    """(lineno, line) for the message of each tag a commit header copies in a `mergetag` field (a merge of a signed
+    tag). The field's lines after the first begin with one space; the copied tag's own header (object, type, tag,
+    tagger) ends at its first empty line, and the rest is the tag's message and signature. Numbered from 1 across
+    all mergetag fields."""
+    out, inside, in_message = [], False, False
+    for line in header.split("\n"):
+        if line.startswith("mergetag "):
+            inside, in_message = True, False
+        elif inside and line.startswith(" "):
+            if in_message:
+                out.append(line[1:])
+            elif not line[1:]:
+                in_message = True
+        else:
+            inside = False
+    return list(enumerate(out, 1))
 
 
 MAX_TAG_DEPTH = 20
@@ -710,7 +817,7 @@ def _diff_changes(repo, base, commit):
             yield path, n, line
     yield from _text_diff(repo, base, commit, added)
     for path, lines in added.items():
-        if not YAML_EXT.search(path) or not lines:
+        if not KEYED_EXT.search(path) or not lines:
             continue
         text = texts.get(path)
         if text is None:
@@ -720,17 +827,25 @@ def _diff_changes(repo, base, commit):
                 yield path, n, joined
 
 
+# A diff header line that marks a submodule entry (file mode 160000): its one added line is git's own
+# `Subproject commit <id>`, the commit the submodule points at, not text from a file.
+_SUBMODULE_MODE = re.compile(r"(?:new file mode|new mode|index \S+) 160000$")
+
+
 def _text_diff(repo, base, commit, added):
-    """(path, lineno, line) for each line the text diff adds; each is also recorded in added[path]."""
+    """(path, lineno, line) for each line the text diff adds; each is also recorded in added[path]. The added line of
+    a submodule entry (_SUBMODULE_MODE) is skipped, so a `Subproject commit` line in any other file is read."""
     # A `+++ ` line is a file header only between a `diff ` line and that file's first hunk: inside a hunk it is an
     # added line that starts with `++ ` (KIT-GUARD-FIX3), which must not end the file or rename it.
     # No textconv or external diff: a local diff driver must not change what is scanned. The prefixes are set here,
     # so a preference such as diff.noprefix or diff.mnemonicPrefix cannot hide every path (KIT-PUBr.f.pr F3).
-    path, n, header = None, 0, False
+    path, n, header, submodule = None, 0, False, False
     for line in git(repo, "diff", "--no-color", "--no-textconv", "--no-ext-diff", "--no-relative", "--src-prefix=a/",
                     "--dst-prefix=b/", "--unified=0", base, commit).split("\n"):
         if line.startswith("diff "):
-            path, header = None, True
+            path, header, submodule = None, True, False
+        elif header and _SUBMODULE_MODE.match(line):
+            submodule = True
         elif header and line.startswith("+++ "):
             name = unquote_path(line[4:])  # `b/x`, `"b/x \"y\""`, `b/x y<TAB>` or /dev/null
             path = name[2:] if name.startswith("b/") else None
@@ -738,7 +853,7 @@ def _text_diff(repo, base, commit, added):
             header = False
             m = re.search(r"\+(\d+)", line)
             n = int(m.group(1)) if m else 0
-        elif line.startswith("+") and path:
+        elif line.startswith("+") and path and not submodule:
             added.setdefault(path, {})[n] = line[1:]
             yield path, n, line[1:]
             n += 1
@@ -842,9 +957,11 @@ def main(argv=None):
             if len(a.push) < 2:
                 raise ValueError("--push needs a remote and at least one branch or tag")
             a.remote, (push_lines, push_specs) = a.push[0], hook_lines(a.repo, a.push[0], a.push[1:])
-            ranges, findings, tags = pushed_ranges(a.repo, a.remote, push_lines)
         elif a.pushed_refs:
-            ranges, findings, tags = pushed_ranges(a.repo, a.remote, sys.stdin.read().splitlines())
+            push_lines = sys.stdin.read().splitlines()
+        if a.push or a.pushed_refs:
+            ranges, findings, tags = pushed_ranges(a.repo, a.remote, push_lines)
+            findings += scan(ref_name_lines(push_lines), names or ())
         else:
             ranges = [resolve_range(a.repo, a.rng, a.remote)]
         names_path = os.path.relpath(os.path.abspath(a.names), os.path.abspath(a.repo)).replace(os.sep, "/")
