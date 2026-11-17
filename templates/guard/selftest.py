@@ -117,7 +117,40 @@ PUSHED_SECRET = "wifi_" + "pass" + "word: " + "hunter22" + "hunter22"  # guard: 
 # tag message, near copies of secrets.yaml and .env, a token as a branch name, the message a merge copies from a
 # signed tag into its header, and two that must go through: a pin mapping under a key that names a pin, and a
 # submodule.
+# The v1.1 review added eighteen (FILES, and a submodule update that must go through): a comment line between a key
+# and its value, a quoted value with a colon, a braille blank and two controls before a key, copies of secrets.yaml
+# named before the extension, a `Subproject commit` line in a text file, and two templates that must go through.
+# A quoted four-digit value under a PIN key, split so this file does not carry the shape itself.
+PUSHED_PIN = "alarm_" + "pin: " + '"48' + '21"'  # guard: allow invented fixture value
 REF_TOKEN = "gh" + "p_" + "A1b2C3x4" * 5  # guard: allow invented fixture value
+# v1.1 review (KIT-GUARD-NEXTr) cases: one file on the side branch each. how: (label, path, text, planted).
+_VALUE = PUSHED_SECRET.split(": ")[1]
+_PIN_KEY, _PIN_VALUE = PUSHED_PIN.split(": ")
+_PW_KEY = "wifi_" + "pass" + "word"
+FILES = {
+    "file comment": ("a password after a comment line under its YAML key (F1, R10)", "ha/side.yaml",
+                     f"{_PW_KEY}:\n  # the guest network\n  {_VALUE}\n", True),
+    "file comment pin": ("a quoted PIN after a comment line under its YAML key (F1, R25)", "ha/side.yaml",
+                         f"{_PIN_KEY}:\n  # keypad\n  {_PIN_VALUE}\n", True),
+    "file colon": ("a quoted next-line value with a colon and a space (F2, R14)", "ha/side.yaml",
+                   f'{_PW_KEY}:\n  "{_VALUE}: {_VALUE}"\n', True),
+    "file braille": ("a PIN after a braille blank (F3, R02)", "ha/side.yaml", "\u2800" + PUSHED_PIN + "\n", True),
+    "file delete": ("a PIN after a delete control (F3, R03)", "ha/side.yaml", "\x7f" + PUSHED_PIN + "\n", True),
+    "file escape": ("a PIN after an escape control (F3, R06)", "ha/side.yaml", "\x1b" + PUSHED_PIN + "\n", True),
+    "file finder": ("a Finder copy of secrets.yaml (F4, R40)", "ha/secrets copy.yaml", "home_zip: 00000\n", True),
+    "file download": ("a browser copy of secrets.yaml (F4, R41)", "ha/secrets (1).yaml", "home_zip: 00000\n", True),
+    "file yml": ("secrets.yml (F4, R42)", "ha/secrets.yml", "home_zip: 00000\n", True),
+    "file underscore": ("secrets.yaml_bak (F4, R43)", "ha/secrets.yaml_bak", "home_zip: 00000\n", True),
+    "file dash": ("secrets-backup.yaml (F4, R44)", "ha/secrets-backup.yaml", "home_zip: 00000\n", True),
+    "file env underscore": (".env_local (F4, R45)", ".env_local", "API_TOKEN=<your token>\n", True),
+    "file swap": ("an editor swap file of secrets.yaml (F4, R46)", "ha/.secrets.yaml.swp", "home_zip: 00000\n", True),
+    "file windows": ("a Windows copy of secrets.yaml (F4, R48)", "ha/secrets - Copy.yaml", "home_zip: 00000\n", True),
+    "file subproject": ("a 40-hex value written as a submodule line in a text file (F6, R54)", "docs/notes.md",
+                        "Subproject commit " + "0a1b2c3d4e" * 4 + "\n", True),
+    "file dist": ("a .env.dist template with placeholders (F5, A09)", ".env.dist", "API_TOKEN=<your token>\n", False),
+    "file template": ("a secrets.example.yaml template with placeholders", "ha/secrets.example.yaml",
+                      "home_zip: <your zip>\n", False),
+}
 PUSH_CASES = [("a push of another branch", "branch", ["push", "origin", "side"], True),
               ("a push of a tag only that tag holds", "tag", ["push", "origin", "v9"], True),
               ("git push --all", "branch", ["push", "--all", "origin"], True),
@@ -155,12 +188,12 @@ PUSH_CASES = [("a push of another branch", "branch", ["push", "origin", "side"],
               ("a tag message a merge copies into its commit header", "mergetag", ["push", "origin", "side"], True),
               ("an ESPHome pin mapping under a secret-shaped key", "pin mapping", ["push", "origin", "side"], False),
               ("a submodule added", "submodule", ["push", "origin", "side"], False),
+              ("a submodule updated", "submodule update", ["push", "origin", "side"], False),
+              *[(label, how, ["push", "origin", "side"], planted) for how, (label, _, _, planted) in FILES.items()],
               ("a clean branch", "clean", ["push", "origin", "side"], False)]
 AUTHOR = ["-c", "user.name=selftest", "-c", "user.email=selftest@example.invalid"]
 PUSHED_VALUE = PUSHED_SECRET.split(": ")[1]
 SIGNATURE_START = "-----BEGIN PGP SIGNATURE-----"
-# A quoted four-digit value under a PIN key, split so this file does not carry the shape itself.
-PUSHED_PIN = "alarm_" + "pin: " + '"48' + '21"'  # guard: allow invented fixture value
 
 
 # A key id in the shape of the AWS documentation's example, split so this file does not carry the shape itself.
@@ -238,9 +271,16 @@ def plant_ref(work, how):
         git(work, "update-ref", "refs/heads/scratch", merge)
     elif how == "pin mapping":
         commit(work, "esphome/node.yaml", "interrupt_" + "pin:\n  number: GPIO4\n  inverted: true\n")
-    elif how == "submodule":
+    elif how.startswith("submodule"):
         git(work, "update-index", "--add", "--cacheinfo", f"160000,{'0a1b2c3d4e' * 4},vendor/lib")
         git(work, *AUTHOR, "commit", "-qm", "add a submodule")
+        if how == "submodule update":  # the remote has the first commit; only the update is new
+            git(work, "push", "-q", "--no-verify", "origin", "scratch:refs/heads/side")
+            git(work, "update-index", "--cacheinfo", f"160000,{'e4d3c2b1a0' * 4},vendor/lib")
+            git(work, *AUTHOR, "commit", "-qm", "update a submodule")
+    elif how in FILES:
+        _, path, text, _ = FILES[how]
+        commit(work, path, text)
     elif how == "bom":
         commit(work, "ha/side.yaml", b"\xef\xbb\xbf" + PUSHED_PIN.encode() + b"\n")
     elif how == "tag block":
@@ -566,9 +606,10 @@ def hook_fixtures(repo):
         print(("ok   " if not wrong else "FAIL ") + f"pushed refs: {sum(c[3] for c in PUSH_CASES)} pushes refused "
               "(another branch, tags, --all, --tags, a CR block value, diff.noprefix, a changed block key, a byte-order "
               "mark, a YAML tag, commit and tag messages, signature markers, tag chains of 20 and 21, format "
-              "characters and combining marks, a value on the line after its key, a signature-shaped block, near "
-              "copies of secret files, a token as a branch name, a merged tag's message), a clean chain of 20 tags, "
-              "a pin mapping, a submodule and a clean branch sent" + (f" (wrong: {', '.join(wrong)})" if wrong else ""))
+              "characters, combining marks, controls and a braille blank, a value on the line after its key or "
+              "after a comment line, a quoted value with a colon, a signature-shaped block, near copies of secret "
+              "files, a token as a branch name, a merged tag's message, a submodule line in a text file), a clean "
+              "chain of 20 tags, a pin mapping, a submodule added and updated, two templates and a clean branch sent" + (f" (wrong: {', '.join(wrong)})" if wrong else ""))
         install(default, b'#!/bin/sh\nexec python3 guard/push_guard.py --repo . --remote "$1"\n')
         case("a hook from before --pushed-refs is not accepted", "error", "unverified", "hook_wiring_unverified")
         install(default)

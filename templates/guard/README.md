@@ -104,6 +104,12 @@ The guard looks for known shapes. It is a net for mistakes, not proof that a pus
 - the author, committer and tagger names and e-mail addresses on each commit and tag (set them before the first
   commit); a branch or tag name is scanned, with the shapes and the names list, but a ref being deleted is not;
 - a file the guard cannot read as text and that is listed in `binary.txt`;
+- a value on the line after its key in a form that formatters do not write: a JSON key that is not first on its
+  line (`{"wifi_password":` and the value below), a JSON colon on the next line, a YAML complex key
+  (`? wifi_password` and `: <value>` below); and any value on the line after its key outside a `.yaml`, `.yml` or
+  `.json` file (a YAML example in a Markdown code block);
+- a commit header field other than `mergetag` (git writes no other field that holds text, but a hand-made commit
+  can carry one);
 - a push that does not run it: `git push --no-verify`, a computer that does not run the hook, or a tool that
   pushes without git.
 Keep secrets out of the repository in the first place: in `secrets.yaml` (never committed) and `!secret` references.
@@ -114,11 +120,13 @@ Keep secrets out of the repository in the first place: in `secrets.yaml` (never 
   `sha`: `"repo_commit": "..."`), and a 64-character digest under `sha256`, `checksum`, `digest` or `hash`: only
   that value is masked; the rest of the line is still scanned. A commit id or checksum anywhere else (in a
   sentence, under another key) is refused; mark it `guard: allow commit id`.
-- The commit a submodule points at (the `Subproject commit <id>` line git writes when you add or update a
-  submodule).
-- A template of a secret file with placeholders, named `.env.example`, `.env.sample`, `.env.template` or the
-  same after `secrets.yaml`: its lines are scanned like any other file's. Any other copy of `secrets.yaml` or
-  `.env` (`secrets.yaml.bak`, `secrets.yaml~`, `.env.local`) is a forbidden path.
+- The commit a submodule points at: a submodule entry is not a file, so its `Subproject commit <id>` line is not
+  read. The same line written in a text file is read like any other.
+- A template of a secret file with placeholders, whose name ends in `example`, `sample`, `template`, `dist` or
+  `defaults`: `.env.example`, `.env.dist`, `secrets.yaml.sample`, `secrets.example.yaml`. Its lines are scanned
+  like any other file's. Every other file named `secrets` with `.yaml` or `.yml` in its name is a forbidden path
+  (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets (1).yaml`, `secrets-backup.yaml`, `secrets.yml`,
+  `.secrets.yaml.swp`), and so is `.env` followed by `.`, `_`, `-` or `~` (`.env.local`, `.env_local`).
 - A password named by its key or by `!secret`, any other YAML tag (`!lambda`, `!include`), a template
   (`{{ ... }}`), an environment variable (`$VAR`, `${VAR}`), a `<placeholder>` (also as a URL's password); a number
   that is part of a date, a version or a decimal.
