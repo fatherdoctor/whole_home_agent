@@ -94,6 +94,10 @@ import unicodedata
 
 # The last word of a template's name: `.env.example`, `.env.dist`, `secrets.yaml.sample`.
 TEMPLATE_SUFFIX = r"(?:example|sample|template|dist|defaults)"
+# What follows `.env` in a template's name: words of letters and digits, each after `.`, `_` or `-`, and a template
+# word last (`.env.example`, `.env_sample`, `.env.local.example`). A space, a `~` or a word after the template word
+# (`.env.example.bak`) makes it a copy, not a template.
+ENV_TEMPLATE_TAIL = r"(?:[._-][a-z0-9]+)*[._-]" + TEMPLATE_SUFFIX + r"$"
 FORBIDDEN_PATHS = [
     re.compile(p, re.I) for p in (
         # A copy under a near name is forbidden too: anything between `secrets` and `.yaml` or `.yml` in one file
@@ -108,8 +112,11 @@ FORBIDDEN_PATHS = [
         # `#secrets.yaml#`. Another word in front (`blueprint_secrets.yaml`) is a file of its own (README, Limits).
         r"(^|/)(?:#|copy (?:\(\d+\) )?of |(?:old|orig|backup|bak)[._ -])secrets\.ya?ml(?!\." + TEMPLATE_SUFFIX
         + r"$)[^/]*$",
-        # `.env`, then `.`, `_` or `-` and a template word, is a template: `.env.example`, `.env_sample`.
-        r"(^|/)\.env(?![._-]" + TEMPLATE_SUFFIX + r"$)([._~ -]|$)",
+        # `.env` and anything after it but a template's tail (`.env.local`, `.env copy`, `.env.example.bak`).
+        r"(^|/)\.env(?!" + ENV_TEMPLATE_TAIL + r")([._~ -]|$)",
+        # The same copy names in front of `.env`: `Copy of .env`, `old_.env`, an editor's `#.env#`.
+        r"(^|/)(?:#|copy (?:\(\d+\) )?of |(?:old|orig|backup|bak)[._ -])\.env(?!" + ENV_TEMPLATE_TAIL
+        + r")([._~ #-]|$)",
         r"(^|/)\.storage/", r"\.(key|pem|p12|pfx)$", r"(^|/)id_(rsa|ed25519|ecdsa)$",
         r"\.tar(\.gz)?$", r"emergency[_ -]?kit",
         r"\.db(-wal|-shm|-journal)?$", r"(^|/)\.git-credentials", r"(^|/)\.credentials\.json$",

@@ -742,7 +742,18 @@ for _path, _want in (("secrets.yaml.bak", ["forbidden path"]), ("ha/secrets.yaml
                      ("ha/old_secrets.yaml", ["forbidden path"]), ("ha/backup-secrets.yml", ["forbidden path"]),
                      ("ha/#secrets.yaml#", ["forbidden path"]), (".env copy", ["forbidden path"]),
                      (".env (1)", ["forbidden path"]), ("ha/old_secrets.yaml.example", []),
-                     ("ha/old_secrets.md", []), ("ha/secret_santa.yaml", []), ("ha/golden_secrets.yaml", [])):
+                     ("ha/old_secrets.md", []), ("ha/secret_santa.yaml", []), ("ha/golden_secrets.yaml", []),
+                     # KIT-GUARD-NEXT.h D1 (closer G04): a template word at the end of a longer `.env` name.
+                     (".env.local.example", []), (".env.production.sample", []), (".env.development.example", []),
+                     ("app/.env.local-template", []), (".env.example.local", ["forbidden path"]),
+                     (".env-example~", ["forbidden path"]), (".env.local.example~", ["forbidden path"]),
+                     (".env.local example", ["forbidden path"]), (".env.my secrets.example", ["forbidden path"]),
+                     (".env..example", ["forbidden path"]), (".env.example_real", ["forbidden path"]),
+                     # D2 (closer G27, G30): the same copy names in front of `.env` as in front of `secrets.yaml`.
+                     ("#.env#", ["forbidden path"]), ("Copy of .env", ["forbidden path"]),
+                     ("app/Copy (2) of .env.local", ["forbidden path"]), ("old_.env", ["forbidden path"]),
+                     ("backup-.env", ["forbidden path"]), ("Copy of .env.local.example", []),
+                     ("Copy of .envrc", []), ("docs/copy of env.md", [])):
     case(f"guard: path {_path}", [k for _, _, k in guard.scan([(_path, None, None)])], _want)
 # F6 (R54): the submodule entry is skipped by its file mode in the diff (the pushes in selftest.py), so a
 # `Subproject commit` line in a text file is read like any other line.

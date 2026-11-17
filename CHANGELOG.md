@@ -15,9 +15,9 @@
 - Scan the whole message of an annotated tag, its signature block included.
 - Scan the message of a signed tag that a merge copies into the merge commit's header.
 - Refuse a near copy of `secrets.yaml` or `.env` (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets.yml`,
-  `Copy of secrets.yaml`, `old_secrets.yaml`, `#secrets.yaml#`, `.env.local`, `.env_local`, `.env copy`). A
-  template such as `.env.example`, `.env-example`, `.env_sample` or `secrets.example.yaml` is still scanned line by
-  line. The guard README's Limits says which copies it does not know by name.
+  `Copy of secrets.yaml`, `old_secrets.yaml`, `#secrets.yaml#`, `.env.local`, `.env_local`, `.env copy`,
+  `Copy of .env`, `#.env#`). A template such as `.env.example`, `.env-example`, `.env_sample`, `.env.local.example`
+  or `secrets.example.yaml` is still sent and scanned line by line. The guard README's Limits says which copies it does not know by name.
 - Scan each branch and tag name a push sends. A delete is not scanned, so a badly named branch can be removed.
 - Stop the false refusal of a submodule: a submodule entry is not read as a file. A `Subproject commit` line in a
   text file is still read.
