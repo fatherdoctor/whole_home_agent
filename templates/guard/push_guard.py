@@ -39,7 +39,8 @@ removed in the next is still in the pushed history. A merge commit adds only the
 a pull that merges does not charge the pusher with lines already upstream. A photo is read as the commit that
 touched it left it. It scans for:
   - forbidden paths: secrets.yaml and .env, also under a near name (secrets.yaml.bak, secrets copy.yaml,
-    secrets.yml, .env.local; not a template whose name ends in example, sample, template, dist or defaults), .storage/, *.key, *.pem, id_rsa/id_ed25519 (the private half), backup archives,
+    secrets.yml, Copy of secrets.yaml, .env.local, .env copy; not a template whose name ends in example, sample,
+    template, dist or defaults), .storage/, *.key, *.pem, id_rsa/id_ed25519 (the private half), backup archives,
     the backup emergency kit, the recorder database (home-assistant_v2.db), git and agent credential files
     (.git-credentials, .credentials.json, .claudecode/);
   - credential shapes: a JWT (Home Assistant long-lived tokens are JWTs), "Bearer <long value>", a private key
@@ -103,7 +104,12 @@ FORBIDDEN_PATHS = [
         # are still scanned like any file's.
         r"(^|/)\.?secrets(?!\.ya?ml\." + TEMPLATE_SUFFIX + r"$|[._-]" + TEMPLATE_SUFFIX + r"\.ya?ml$)"
         r"[^/]*\.ya?ml[^/]*(/|$)",
-        r"(^|/)\.env(?!\." + TEMPLATE_SUFFIX + r"$)([._~-]|$)",
+        # A copy named in front: `Copy of secrets.yaml` (Windows, Google Drive), `old_secrets.yaml`, an editor's
+        # `#secrets.yaml#`. Another word in front (`blueprint_secrets.yaml`) is a file of its own (README, Limits).
+        r"(^|/)(?:#|copy (?:\(\d+\) )?of |(?:old|orig|backup|bak)[._ -])secrets\.ya?ml(?!\." + TEMPLATE_SUFFIX
+        + r"$)[^/]*$",
+        # `.env`, then `.`, `_` or `-` and a template word, is a template: `.env.example`, `.env_sample`.
+        r"(^|/)\.env(?![._-]" + TEMPLATE_SUFFIX + r"$)([._~ -]|$)",
         r"(^|/)\.storage/", r"\.(key|pem|p12|pfx)$", r"(^|/)id_(rsa|ed25519|ecdsa)$",
         r"\.tar(\.gz)?$", r"emergency[_ -]?kit",
         r"\.db(-wal|-shm|-journal)?$", r"(^|/)\.git-credentials", r"(^|/)\.credentials\.json$",
@@ -226,8 +232,9 @@ _BLOCK_KEY = re.compile(
     r"(?P<block>[|>][1-9+-]{0,2})?\s*(?:#.*)?$", re.I)
 # A next line that is not a scalar value: another key (`number: GPIO4` under ESPHome's `interrupt_pin:`) or a sequence
 # item. The key above then holds a mapping or a list, whose own lines are judged as usual. A quoted key closes its
-# quote before the colon: `"hunter22: hunter22"` is a quoted value, not a key.
-_NOT_A_SCALAR = re.compile(r"^\s*(?:(?:'[^']*'|\"[^\"]*\"|[^\s:'\"]+)\s*:(?:\s|$)|-(?:\s|$))")
+# quote before the colon: `"hunter22: hunter22"` is a quoted value, not a key, and so is `"x\": y"` (an escaped
+# quote does not close it).
+_NOT_A_SCALAR = re.compile(r"^\s*(?:(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|[^\s:'\"]+)\s*:(?:\s|$)|-(?:\s|$))")
 _COMMENT_LINE = re.compile(r"^\s*#")
 _NAMED_TAG = re.compile(r"(?<!\S)![A-Za-z][\w-]*(?!\S)")
 # Files whose secret keys can hold their value on the next lines (block_values): YAML, and JSON for a key at the end

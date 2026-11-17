@@ -712,7 +712,12 @@ for _text, _want in ((f"wifi_password:\n  {_V}\n", [f"wifi_password: {_V}"]),
                      # Decided: listed in the guard README's Limits, not read (R15, R16, R23).
                      (f'{{"wifi_password":\n  "{_V}"}}\n', []),
                      (f'{{\n  "wifi_password"\n  : "{_V}"\n}}\n', []),
-                     (f"? wifi_password\n: {_V}\n", [])):
+                     (f"? wifi_password\n: {_V}\n", []),
+                     # KIT-GUARD-NEXT.g C4 (closer K22, K26): an escaped quote does not close a double-quoted key,
+                     # so a value with a quote, a colon and a space is still a value.
+                     (f'wifi_password:\n  "{_V}\\": {_V}xx"\n', [f'wifi_password: "{_V}\\": {_V}xx"']),
+                     (f'{{\n  "wifi_password":\n  "{_V}\\": {_V}xx"\n}}\n', [f'  "wifi_password": "{_V}\\": {_V}xx"']),
+                     ('api_token:\n  "a\\" b": x\n', [])):
     case(f"guard: next-line value in {_text[:24]!r}", [j for _, j, _ in guard.block_values(_text)], _want)
 # KIT-GUARD-NEXTr F4 (R40-R48): a copy named before the extension, a .yml, a `_` suffix and an editor's swap file
 # are forbidden paths; F5 (A09): .env.dist and .env.defaults are templates.
@@ -725,7 +730,19 @@ for _path, _want in (("secrets.yaml.bak", ["forbidden path"]), ("ha/secrets.yaml
                      ("ha/.secrets.yaml.swp", ["forbidden path"]), (".env_local", ["forbidden path"]),
                      ("secrets.yaml.example.bak", ["forbidden path"]), (".env.example.bak", ["forbidden path"]),
                      (".env.dist", []), (".env.defaults", []), ("secrets.example.yaml", []), (".envrc", []),
-                     ("docs/secrets.md", []), ("tools/secrets_scan.py", []), ("blueprint_secrets.yaml", [])):
+                     ("docs/secrets.md", []), ("tools/secrets_scan.py", []), ("blueprint_secrets.yaml", []),
+                     # KIT-GUARD-NEXT.g C1 (closer A25, A26): a template word after `.env` and a dot, `_` or `-`.
+                     (".env-example", []), (".env_sample", []), (".env-template", []), (".env_dist", []),
+                     (".env-example.bak", ["forbidden path"]), (".env-prod", ["forbidden path"]),
+                     # C2 (A21), decided: a file named `secrets` with `.yml` in it is refused; the README says rename it.
+                     (".github/wf/secrets-scan.yml", ["forbidden path"]), ("ha/secrets_rotation.yaml", ["forbidden path"]),
+                     (".github/wf/secret-scan.yml", []), (".github/wf/scan-secrets.yml", []),
+                     # C3 (K43, K44, K46, K50): a copy named in front of `secrets.yaml`, and `.env` with a space.
+                     ("ha/Copy of secrets.yaml", ["forbidden path"]), ("ha/Copy (2) of secrets.yaml", ["forbidden path"]),
+                     ("ha/old_secrets.yaml", ["forbidden path"]), ("ha/backup-secrets.yml", ["forbidden path"]),
+                     ("ha/#secrets.yaml#", ["forbidden path"]), (".env copy", ["forbidden path"]),
+                     (".env (1)", ["forbidden path"]), ("ha/old_secrets.yaml.example", []),
+                     ("ha/old_secrets.md", []), ("ha/secret_santa.yaml", []), ("ha/golden_secrets.yaml", [])):
     case(f"guard: path {_path}", [k for _, _, k in guard.scan([(_path, None, None)])], _want)
 # F6 (R54): the submodule entry is skipped by its file mode in the diff (the pushes in selftest.py), so a
 # `Subproject commit` line in a text file is read like any other line.

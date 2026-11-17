@@ -9,13 +9,15 @@
   override, an isolate, a variation selector or a combining joiner no longer hides a key such as `alarm_pin`.
 - Read a secret on the line after its key: a plain or quoted YAML value indented under the key, and a JSON key at
   the end of its line, also after comment lines between the key and the value. A mapping or a list under the key
-  is not read as its value. A quoted value that holds a colon and a space is read as a value, not as a key.
+  is not read as its value. A quoted value that holds a colon and a space is read as a value, not as a key, also
+  when it holds an escaped quote.
 - Remove control characters (delete, escape) and the braille blank before the line-start checks too.
 - Scan the whole message of an annotated tag, its signature block included.
 - Scan the message of a signed tag that a merge copies into the merge commit's header.
 - Refuse a near copy of `secrets.yaml` or `.env` (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets.yml`,
-  `.env.local`, `.env_local`). A template such as `.env.example`, `.env.dist` or `secrets.example.yaml` is still
-  scanned line by line.
+  `Copy of secrets.yaml`, `old_secrets.yaml`, `#secrets.yaml#`, `.env.local`, `.env_local`, `.env copy`). A
+  template such as `.env.example`, `.env-example`, `.env_sample` or `secrets.example.yaml` is still scanned line by
+  line. The guard README's Limits says which copies it does not know by name.
 - Scan each branch and tag name a push sends. A delete is not scanned, so a badly named branch can be removed.
 - Stop the false refusal of a submodule: a submodule entry is not read as a file. A `Subproject commit` line in a
   text file is still read.

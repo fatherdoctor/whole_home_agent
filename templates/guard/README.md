@@ -98,7 +98,11 @@ computer, terminal or editor.
 The guard looks for known shapes. It is a net for mistakes, not proof that a push is safe. It does not catch:
 - a secret under a key that does not name one (`note: <value>`), unless the value has a known token shape (a JWT,
   `ghp_`, `sk-`, an AWS key id, 40 or more hex characters);
-- a password or code written in plain words, or split across lines or files;
+- a password or code written in plain words, or split across lines or files, or a list of values under a secret key
+  (`wifi_passwords:` and `- <value>` on the lines below);
+- a copy of `secrets.yaml` with another word in front of the name (`house_secrets.yaml`, `Kopie von secrets.yaml`);
+  its lines are still scanned. The guard knows the copies that tools and editors make
+  (`Copy of`, `old_`, `backup-`, `#...#`) and the names in the next section;
 - a value encoded so that it no longer looks like itself (base64, hex of text, a compressed or encrypted file);
 - a name that is not on the names list, a nickname, or a name in another spelling;
 - the author, committer and tagger names and e-mail addresses on each commit and tag (set them before the first
@@ -124,9 +128,13 @@ Keep secrets out of the repository in the first place: in `secrets.yaml` (never 
   read. The same line written in a text file is read like any other.
 - A template of a secret file with placeholders, whose name ends in `example`, `sample`, `template`, `dist` or
   `defaults`: `.env.example`, `.env.dist`, `secrets.yaml.sample`, `secrets.example.yaml`. Its lines are scanned
-  like any other file's. Every other file named `secrets` with `.yaml` or `.yml` in its name is a forbidden path
-  (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets (1).yaml`, `secrets-backup.yaml`, `secrets.yml`,
-  `.secrets.yaml.swp`), and so is `.env` followed by `.`, `_`, `-` or `~` (`.env.local`, `.env_local`).
+  like any other file's. A template word can follow `.`, `_` or `-`: `.env-example` and `.env_sample` are
+  templates too. Every other file whose name starts with `secrets` and has `.yaml` or `.yml` in it is a forbidden
+  path (`secrets.yaml.bak`, `secrets copy.yaml`, `secrets (1).yaml`, `secrets-backup.yaml`, `secrets.yml`,
+  `.secrets.yaml.swp`), and so is a copy named in front (`Copy of secrets.yaml`, `old_secrets.yaml`,
+  `#secrets.yaml#`) and `.env` followed by `.`, `_`, `-`, `~` or a space (`.env.local`, `.env_local`, `.env copy`).
+  A file of your own with such a name, such as a workflow `secrets-scan.yml`, is refused too: rename it, for example
+  to `secret-scan.yml`. The guard has no way to allow a forbidden path.
 - A password named by its key or by `!secret`, any other YAML tag (`!lambda`, `!include`), a template
   (`{{ ... }}`), an environment variable (`$VAR`, `${VAR}`), a `<placeholder>` (also as a URL's password); a number
   that is part of a date, a version or a decimal.
