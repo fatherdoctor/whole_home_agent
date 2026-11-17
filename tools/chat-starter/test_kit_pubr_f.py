@@ -60,8 +60,8 @@ def load_guard():
 
 
 class TagSignature(unittest.TestCase):
-    """KIT-PUBr.f.pr4 F2: only a well-formed signature block at the end of a tag message is left out of the scan.
-    The real pushes with a marker in the middle are in selftest.py; this checks the signed-tag shape itself."""
+    """A tag message is read whole: a marker anywhere does not end the scan (KIT-PUBr.f.pr4 F2), and since v1.1 a
+    signature block at the very end is read too. The real pushes are in selftest.py; this checks the shape itself."""
 
     def tag_lines(self, message):
         guard = load_guard()
@@ -76,9 +76,18 @@ class TagSignature(unittest.TestCase):
                                     + message)
             return [line for _, _, line in guard.message_lines(tmp, tag, "tag")]
 
-    def test_trailing_signature_block_is_left_out(self):
+    def test_trailing_signature_block_is_read(self):
+        # v1.1: a block shaped like a signature could hold a value, so the whole message is read.
         block = "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEE0aBcDeF1234+/abc=\n=AbCd\n-----END PGP SIGNATURE-----\n"
-        self.assertEqual([line for line in self.tag_lines("release 1.0\n" + block) if line], ["release 1.0"])
+        lines = self.tag_lines("release 1.0\n" + block)
+        self.assertIn("release 1.0", lines)
+        self.assertIn("iQEzBAABCAAdFiEE0aBcDeF1234+/abc=", lines)
+
+    def test_a_real_signature_block_is_not_refused(self):
+        guard = load_guard()
+        block = "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEE0aBcDeF1234+/abc=\n=AbCd\n-----END PGP SIGNATURE-----\n"
+        items = [("tag message", n, line) for n, line in enumerate(self.tag_lines("release 1.0\n" + block), 1)]
+        self.assertEqual(guard.scan(items), [])
 
     def test_text_after_a_marker_is_read(self):
         lines = self.tag_lines("release\n-----BEGIN SSH SIGNATURE-----\nnote: after the marker\n")

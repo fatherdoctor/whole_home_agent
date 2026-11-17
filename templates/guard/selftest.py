@@ -112,6 +112,12 @@ PUSHED_SECRET = "wifi_" + "pass" + "word: " + "hunter22" + "hunter22"  # guard: 
 # a commit the remote already has. KIT-PUBr.f.pr4 added a message after a signature marker (F2) and tag chains at and
 # past the depth the guard reads (F3). A clean chain of 21 is refused, not passed unread; a clean chain of 20 and the
 # last case, a clean branch, must go through.
+# v1.1 added fourteen: a character that prints as nothing or marks the one before it (one per Unicode class), a value
+# on the line after its key (YAML plain, YAML quoted, JSON), a value inside a signature-shaped block at the end of a
+# tag message, near copies of secrets.yaml and .env, a token as a branch name, the message a merge copies from a
+# signed tag into its header, and two that must go through: a pin mapping under a key that names a pin, and a
+# submodule.
+REF_TOKEN = "gh" + "p_" + "A1b2C3x4" * 5  # guard: allow invented fixture value
 PUSH_CASES = [("a push of another branch", "branch", ["push", "origin", "side"], True),
               ("a push of a tag only that tag holds", "tag", ["push", "origin", "v9"], True),
               ("git push --all", "branch", ["push", "--all", "origin"], True),
@@ -135,12 +141,44 @@ PUSH_CASES = [("a push of another branch", "branch", ["push", "origin", "side"],
               ("a planted tag inside a chain of 21 tags", "chain 21 planted", ["push", "origin", "v9"], True),
               ("a clean chain of 21 tags, deeper than the guard reads", "chain 21", ["push", "origin", "v9"], True),
               ("a clean chain of 20 tags", "chain 20", ["push", "origin", "v9"], False),
+              ("a PIN after a right-to-left override (format character)", "mark cf", ["push", "origin", "side"], True),
+              ("a token key after a variation selector (combining mark)", "mark mn", ["push", "origin", "side"], True),
+              ("a PIN after an enclosing mark", "mark me", ["push", "origin", "side"], True),
+              ("a password on the line after its YAML key", "next yaml", ["push", "origin", "side"], True),
+              ("a quoted PIN on the line after its YAML key", "next quoted", ["push", "origin", "side"], True),
+              ("a password on the line after its JSON key", "next json", ["push", "origin", "side"], True),
+              ("a key id inside a signature-shaped block at the end of a tag message", "sig block",
+               ["push", "origin", "v9"], True),
+              ("a copy of secrets.yaml under a near name", "near secrets", ["push", "origin", "side"], True),
+              ("a .env file under a near name", "near env", ["push", "origin", "side"], True),
+              ("a token as the branch name", "clean", ["push", "origin", "side:refs/heads/" + REF_TOKEN], True),
+              ("a tag message a merge copies into its commit header", "mergetag", ["push", "origin", "side"], True),
+              ("an ESPHome pin mapping under a secret-shaped key", "pin mapping", ["push", "origin", "side"], False),
+              ("a submodule added", "submodule", ["push", "origin", "side"], False),
               ("a clean branch", "clean", ["push", "origin", "side"], False)]
 AUTHOR = ["-c", "user.name=selftest", "-c", "user.email=selftest@example.invalid"]
 PUSHED_VALUE = PUSHED_SECRET.split(": ")[1]
 SIGNATURE_START = "-----BEGIN PGP SIGNATURE-----"
 # A quoted four-digit value under a PIN key, split so this file does not carry the shape itself.
 PUSHED_PIN = "alarm_" + "pin: " + '"48' + '21"'  # guard: allow invented fixture value
+
+
+# A key id in the shape of the AWS documentation's example, split so this file does not carry the shape itself.
+KEY_ID = "AK" + "IA" + "IOSFODNN7" + "EXAMPLE"
+MARKS = {"mark cf": "\u202e", "mark mn": "\ufe0f", "mark me": "\u20dd"}
+
+
+def mergetag_commit(work, side):
+    """A merge commit of main and side whose header copies a signed tag of side (`mergetag`), as `git merge` writes
+    it for a signed tag, with the planted value in the copied tag's message. Made by hand: no signing key is needed."""
+    tag = (f"object {side}\ntype commit\ntag v1\ntagger selftest <selftest@example.invalid> 0 +0000\n\nrelease\n"
+           f"{PUSHED_SECRET}\n{SIGNATURE_START}\n\niQEz=\n{SIGNATURE_START.replace('BEGIN', 'END')}\n")
+    first, *rest = tag.rstrip("\n").split("\n")
+    header = "mergetag " + first + "\n" + "".join(" " + line + "\n" for line in rest)
+    person = "selftest <selftest@example.invalid> 0 +0000"
+    body = (f"tree {git_out(work, 'rev-parse', side + '^{tree}')}\nparent {git_out(work, 'rev-parse', 'main')}\n"
+            f"parent {side}\nauthor {person}\ncommitter {person}\n{header}\nmerge v1\n")
+    return git_out(work, "hash-object", "-t", "commit", "-w", "--stdin", input=body.encode())
 
 
 def block(key, props=""):
@@ -159,6 +197,11 @@ def plant_ref(work, how):
     if how == "tag message":  # main is already on the remote: only the tag object and its message are new
         git(work, *AUTHOR, "tag", "-a", "v9", "-m", PUSHED_SECRET, "main")
         return
+    if how == "sig block":  # a block shaped like a signature, at the very end of the message, holding a key id
+        end = SIGNATURE_START.replace("BEGIN", "END")
+        git(work, *AUTHOR, "tag", "-a", "v9", "--cleanup=verbatim", "-m",
+            f"release\n\n{SIGNATURE_START}\n\n{KEY_ID}\n{end}\n", "main")
+        return
     if how == "sig tag":
         git(work, *AUTHOR, "tag", "-a", "v9", "-m", "release\n\n" + SIGNATURE_START + "\n" + PUSHED_SECRET, "main")
         return
@@ -176,6 +219,28 @@ def plant_ref(work, how):
         codec = "utf-16" if how.endswith("utf16") else "utf-8"
         commit(work, "ha/side.yaml", block("label").encode(codec))
         commit(work, "ha/side.yaml", block("wifi_" + "password").encode(codec))
+    elif how in MARKS:
+        key = "porch_api_" + "token: " + PUSHED_VALUE if how == "mark mn" else PUSHED_PIN
+        commit(work, "ha/side.yaml", MARKS[how] + key + "\n")
+    elif how == "next yaml":
+        commit(work, "ha/side.yaml", "wifi_" + "password:\n  " + PUSHED_VALUE + "\n")
+    elif how == "next quoted":
+        commit(work, "ha/side.yaml", PUSHED_PIN.replace(": ", ":\n  ") + "\n")
+    elif how == "next json":
+        commit(work, "tools/cfg.json", '{\n  "wifi_' + 'password":\n    "' + PUSHED_VALUE + '"\n}\n')
+    elif how == "near secrets":
+        commit(work, "ha/secrets.yaml.bak", "home_zip: 00000\n")
+    elif how == "near env":
+        commit(work, ".env.local", "API_TOKEN=" + "abcdefghijklmnopqrstuvwx" + "\n")
+    elif how == "mergetag":
+        commit(work, "ha/side.yaml", "alias: Porch light")
+        merge = mergetag_commit(work, git_out(work, "rev-parse", "HEAD"))
+        git(work, "update-ref", "refs/heads/scratch", merge)
+    elif how == "pin mapping":
+        commit(work, "esphome/node.yaml", "interrupt_" + "pin:\n  number: GPIO4\n  inverted: true\n")
+    elif how == "submodule":
+        git(work, "update-index", "--add", "--cacheinfo", f"160000,{'0a1b2c3d4e' * 4},vendor/lib")
+        git(work, *AUTHOR, "commit", "-qm", "add a submodule")
     elif how == "bom":
         commit(work, "ha/side.yaml", b"\xef\xbb\xbf" + PUSHED_PIN.encode() + b"\n")
     elif how == "tag block":
@@ -241,7 +306,8 @@ def pushed_refs_proof(guard_file, hook_bytes=HOOK_STUB, timeout=60):
             git(work, "config", "--unset-all", "diff.noprefix", check=False)
             git(work, "tag", "-d", "v9", check=False)  # each case makes v9, side or both
             git(work, "branch", "-D", "side", check=False)
-            git(work, "push", "-q", "--no-verify", "origin", ":refs/heads/side", ":refs/tags/v9", check=False)
+            git(work, "push", "-q", "--no-verify", "origin", ":refs/heads/side", ":refs/tags/v9",
+                ":refs/heads/" + REF_TOKEN, check=False)
     return wrong
 
 
@@ -499,8 +565,10 @@ def hook_fixtures(repo):
         failures += bool(wrong)
         print(("ok   " if not wrong else "FAIL ") + f"pushed refs: {sum(c[3] for c in PUSH_CASES)} pushes refused "
               "(another branch, tags, --all, --tags, a CR block value, diff.noprefix, a changed block key, a byte-order "
-              "mark, a YAML tag, commit and tag messages, signature markers, tag chains of 20 and 21), "
-              "a clean chain of 20 tags and a clean branch sent" + (f" (wrong: {', '.join(wrong)})" if wrong else ""))
+              "mark, a YAML tag, commit and tag messages, signature markers, tag chains of 20 and 21, format "
+              "characters and combining marks, a value on the line after its key, a signature-shaped block, near "
+              "copies of secret files, a token as a branch name, a merged tag's message), a clean chain of 20 tags, "
+              "a pin mapping, a submodule and a clean branch sent" + (f" (wrong: {', '.join(wrong)})" if wrong else ""))
         install(default, b'#!/bin/sh\nexec python3 guard/push_guard.py --repo . --remote "$1"\n')
         case("a hook from before --pushed-refs is not accepted", "error", "unverified", "hook_wiring_unverified")
         install(default)

@@ -73,7 +73,6 @@ Known issues in v1.0:
 - The comment at the top of `templates/packages/health-check.yaml` says every simulated check should show a push. Only fault checks push; a notice check raises the notice count and stays quiet. `00-start-here/levels.md` (`L3-health-fired`) has it right.
 - The what-next helper (`tools/what-next/`) checks levels 0 to 2 only. For levels 3 and 4, the agent reads each readiness line in `00-start-here/levels.md` and checks it by hand against the source the table at the end of that page names.
 - Voice assistants: before the owner path saves the scene script or adds a native plug, it does not yet check whether an active Alexa YAML filter or Google's new-entity setting would expose it to a voice assistant. Check **Settings > Voice assistants > Expose** yourself after those steps, and turn off anything you did not mean to share.
-- Push guard: the gaps listed under "Known issues in v1.0" in [`templates/guard/README.md`](templates/guard/README.md#known-issues-in-v10).
 
 *It covers the Home Assistant box and, more and more, the whole home around it: the equipment that is not connected, its records, manuals, maintenance and troubleshooting.*
 

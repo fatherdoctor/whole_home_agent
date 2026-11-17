@@ -13,6 +13,7 @@ house repositories at levels 0-2), and that every YAML template loads. After the
 """
 import importlib.util
 import json
+import re
 import os
 import pathlib
 import subprocess
@@ -677,6 +678,44 @@ case("guard: package path passes", guard.scan([("ha/packages/porch.yaml", None, 
 for bad in ("home-assistant_v2.db", "home-assistant_v2.db-wal", ".git-credentials", "x/.credentials.json",
             ".claudecode/git-credentials"):
     case(f"guard: {bad} path refused", [k for _, _, k in guard.scan([(bad, None, None)])], ["forbidden path"])
+# v1.1: every format character and combining mark is taken out before the line-start shapes; a value on the line
+# after its key is read with the key; near copies of secret files are forbidden; a submodule line is not long hex;
+# a merged tag's message and the pushed ref names are read.
+for _mark in ("\u202e", "\u2066", "\u200f", "\ufe0f", "\u034f", "\u20dd", "\U000e0001"):
+    case(f"guard: a PIN after U+{ord(_mark):04X} refused",
+         [k for _, _, k in guard.scan([("n.yaml", 1, _mark + _PIN)])], ["literal secret"])
+case("guard: an accented listed name still matches", [k for _, _, k in guard.scan(
+     [("d.md", 1, "Ask Zo\u00eb to check")], names=[re.compile(r"(?<!\w)Zo\u00eb(?!\w)", re.I)])], ["household name"])
+for _text, _want in ((f"wifi_password:\n  {_V}\n", [f"wifi_password: {_V}"]),
+                     (f"wifi_password:\n  '{_V}'\n", [f"wifi_password: '{_V}'"]),
+                     ('alarm_pin:\n\n  "4821"\n', ['alarm_pin: "4821"']),
+                     (f'{{\n  "wifi_password":\n  "{_V}"\n}}\n', [f'  "wifi_password": "{_V}"']),
+                     ("wifi_password: !secret\n  wifi\n", ["wifi_password: !secret wifi"]),
+                     (f"wifi_password:\n{_V}\n", []),  # not indented: the key's value is empty, the next line is its own
+                     ("interrupt_pin:\n  number: GPIO4\n", []),
+                     ("api_token:\n  - a\n", []),
+                     ("code:\n  # a comment\n", []),
+                     ("wifi_password: hunter\n  more\n", [])):
+    case(f"guard: next-line value in {_text[:24]!r}", [j for _, j, _ in guard.block_values(_text)], _want)
+for _path, _want in (("secrets.yaml.bak", ["forbidden path"]), ("ha/secrets.yaml~", ["forbidden path"]),
+                     (".env.local", ["forbidden path"]), ("app/.env.production", ["forbidden path"]),
+                     (".env.example", []), ("secrets.yaml.example", []), ("id_rsa.pub", []), ("docs/env.md", [])):
+    case(f"guard: path {_path}", [k for _, _, k in guard.scan([(_path, None, None)])], _want)
+case("guard: a submodule line passes", guard.scan([("vendor/lib", 1, "Subproject commit " + "0a1b2c3d4e" * 4)]), [])
+case("guard: a SHA-256 submodule line passes",
+     guard.scan([("vendor/lib", 1, "Subproject commit " + "0a1b2c3d4e" * 6 + "0a1b")]), [])
+case("guard: long hex after other words is still refused",
+     [k for _, _, k in guard.scan([("d.md", 1, "token Subproject commit " + "0a1b2c3d4e" * 4)])], ["long hex"])
+_MT = ("tree t\nparent a\nparent b\nauthor x\ncommitter x\nmergetag object b\n type commit\n tag v1\n"
+       " tagger x\n \n release\n note two\n -----BEGIN PGP SIGNATURE-----\n \n iQEz=\n -----END PGP SIGNATURE-----")
+case("guard: a merged tag's message is read, its header is not", guard.mergetag_lines(_MT),
+     [(1, "release"), (2, "note two"), (3, "-----BEGIN PGP SIGNATURE-----"), (4, ""), (5, "iQEz="),
+      (6, "-----END PGP SIGNATURE-----")])
+case("guard: no mergetag, nothing read", guard.mergetag_lines("tree t\nparent a\nauthor x\ncommitter x"), [])
+_Z, _S = "0" * 40, "1" * 40
+case("guard: pushed ref names", guard.ref_name_lines([f"refs/heads/main {_S} refs/heads/x-1 {_Z}",
+                                                      f"(delete) {_Z} refs/heads/bad-name {_S}"]),
+     [("pushed ref name", 1, "refs/heads/main"), ("pushed ref name", 2, "refs/heads/x-1")])
 guard_st = load(TEMPLATES / "guard" / "selftest.py", "guard_selftest")
 case("guard: photo with GPS refused", [k for _, _, k in guard.scan([("p/a.jpg", None, None)], read=lambda p: guard_st.jpeg(True))],
      ["photo location (GPS in EXIF)"])
