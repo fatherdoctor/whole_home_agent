@@ -388,6 +388,8 @@ One backlog item at a time, in this loop:
   `git fetch --unshallow`); "no merge base" means the clone is too shallow, not that the branch is wrong.
 - **A session that cannot see the box deploys nothing.** It writes designs and draft changes, never a live edit,
   and never proposes one as a next step.
+- **A change to the kit itself starts from an issue.** Open one before the branch, or use the one that exists. The pull request
+  description says `Closes #n`. Work wanted later stays open with the `backlog` label. See `CONTRIBUTING.md`.
 
 ## The rest of the house (not connected)
 
