@@ -60,6 +60,10 @@ the adapters say what changes.
 | `blueprints/` | Ready-to-import automation blueprints, tested in a real Home Assistant: a battery window keeper and a charger fault watch for a wall tablet on a smart plug, and a beta update notice for testers ([`blueprints/beta-testing.md`](blueprints/beta-testing.md)). |
 | `house/` | Your own files, created by the interviews: profile, docs, config mirror, export. Layout in `house/README.md`. |
 
+## Contributing
+
+Start with an issue, then work on a branch and open a pull request into `main` that says `Closes #n`; `CONTRIBUTING.md` has the steps.
+
 ## Status
 Version 1.0 (November 2026). The principles, install guides, the chat-app entry point, the interviews and the
 templates are written and tested; the adapter notes for radios, voice and notifications are still notes. Every file
